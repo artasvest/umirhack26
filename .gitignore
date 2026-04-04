@@ -1,0 +1,94 @@
+# --- OS ---
+.DS_Store
+.DS_Store?
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# --- Env / secrets (шаблоны *.example коммитим) ---
+.env
+.env.*
+!.env.example
+!.env.*.example
+*.pem
+*.key
+
+# --- Python / backend ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+pip-wheel-metadata/
+wheels/
+
+# Локальная БД и артефакты разработки
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Node / frontend ---
+node_modules/
+.pnpm-store/
+.npm/
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/sdks
+!.yarn/versions
+.pnp.*
+*.tsbuildinfo
+
+# Vite
+frontend/dist/
+frontend/dist-ssr/
+frontend/.vite/
+
+# --- IDE / редакторы ---
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# VS Code — по умолчанию не коммитим; исключение: рекомендуемые расширения
+.vscode/*
+!.vscode/extensions.json
+
+# --- Логи ---
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# --- Прочее ---
+*.local
+.cache/
+tmp/
+temp/

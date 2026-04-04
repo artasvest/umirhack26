@@ -1,0 +1,21 @@
+@import url("https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=Outfit:wght@500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  @apply min-h-screen bg-ink-50 text-ink-900 antialiased;
+}
+
+.quiz-perspective {
+  perspective: 1400px;
+}
+
+.quiz-stage {
+  transform-style: preserve-3d;
+}
