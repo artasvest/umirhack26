@@ -75,26 +75,27 @@ const typeLabel: Record<string, string> = {
 };
 
 const inputClass =
-  "min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] leading-tight text-ink-100 placeholder:text-ink-600 focus:border-ink-500 focus:bg-ink-950/80 focus:outline-none";
+  "min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-[11px] leading-tight text-ink-900 placeholder:text-ink-400 focus:border-accent focus:bg-white focus:outline-none dark:text-ink-100 dark:placeholder:text-ink-600 dark:focus:border-ink-500 dark:focus:bg-ink-950/80";
 
 const addBtnClass =
-  "mt-1 w-full rounded-lg border border-dashed border-ink-600/70 py-1.5 text-[10px] font-medium text-ink-400 transition hover:border-accent/45 hover:bg-ink-800/40 hover:text-accent";
+  "mt-1 w-full rounded-lg border border-dashed border-ink-300 py-1.5 text-[10px] font-medium text-ink-600 transition hover:border-accent/60 hover:bg-amber-50/60 hover:text-accent-dim dark:border-ink-600/70 dark:text-ink-400 dark:hover:border-accent/45 dark:hover:bg-ink-800/40 dark:hover:text-accent";
+
+const cardClass =
+  "quiz-block-node w-[min(100%,260px)] select-none rounded-2xl border p-0 shadow-card ring-1 border-ink-200 bg-white ring-ink-200/40 dark:border-ink-500/80 dark:bg-gradient-to-b dark:from-ink-800 dark:to-ink-900 dark:shadow-xl dark:ring-black/20";
 </script>
 
 <template>
-  <div
-    class="quiz-block-node w-[min(100%,260px)] select-none rounded-2xl border border-ink-500/80 bg-gradient-to-b from-ink-800 to-ink-900 p-0 shadow-xl ring-1 ring-black/20"
-  >
+  <div :class="cardClass">
     <Handle
       type="target"
       :position="Position.Top"
       :connectable="handleConnectable"
-      class="!h-3.5 !w-3.5 !border-2 !border-accent !bg-ink-950 !shadow-md"
+      class="!h-3.5 !w-3.5 !border-2 !border-accent !bg-white !shadow-md dark:!bg-ink-950"
     />
 
-    <div class="border-b border-ink-600/80 px-3 py-2">
-      <div class="text-[9px] font-bold uppercase tracking-widest text-accent/90">{{ typeLabel[q.type] || q.type }}</div>
-      <div class="mt-1 font-display text-[15px] font-semibold leading-snug text-white">
+    <div class="border-b border-ink-200 px-3 py-2 dark:border-ink-600/80">
+      <div class="text-[9px] font-bold uppercase tracking-widest text-accent-dim">{{ typeLabel[q.type] || q.type }}</div>
+      <div class="mt-1 font-display text-[15px] font-semibold leading-snug text-ink-950 dark:text-white">
         {{ q.title?.trim() || "Без названия" }}
       </div>
     </div>
@@ -104,9 +105,9 @@ const addBtnClass =
       <div
         v-for="opt in options"
         :key="opt.id"
-        class="group relative flex min-h-[32px] items-center gap-2 rounded-lg px-2 py-1.5 pr-4 hover:bg-ink-700/40"
+        class="group relative flex min-h-[32px] items-center gap-2 rounded-lg px-2 py-1.5 pr-4 hover:bg-ink-100 dark:hover:bg-ink-700/40"
       >
-        <span class="size-1.5 shrink-0 rounded-full bg-accent/80" aria-hidden="true" />
+        <span class="size-1.5 shrink-0 rounded-full bg-accent/90" aria-hidden="true" />
         <input
           :ref="(el) => setOptInputRef(opt.id, el)"
           :value="opt.label"
@@ -119,7 +120,7 @@ const addBtnClass =
         />
         <span
           v-if="opt.nextStep"
-          class="hidden max-w-[64px] shrink-0 truncate text-[9px] text-accent-dim/90 sm:block"
+          class="hidden max-w-[64px] shrink-0 truncate text-[9px] text-accent-dim sm:block"
           :title="titleOf(opt.nextStep)"
         >
           → {{ titleOf(opt.nextStep) }}
@@ -129,7 +130,7 @@ const addBtnClass =
           type="source"
           :position="Position.Right"
           :connectable="handleConnectable"
-          class="quiz-opt-handle !absolute !right-[-10px] top-1/2 z-10 !h-3 !w-3 !-translate-y-1/2 !border-2 !border-ink-700 !bg-accent !shadow-md transition group-hover:!scale-110 group-hover:!border-accent"
+          class="quiz-opt-handle !absolute !right-[-10px] top-1/2 z-10 !h-3 !w-3 !-translate-y-1/2 !border-2 !border-ink-300 !bg-accent !shadow-md transition group-hover:!scale-110 group-hover:!border-accent dark:!border-ink-700 dark:group-hover:!border-accent"
         />
       </div>
       <button type="button" :class="addBtnClass" @click="addOptionClick">+ вариант</button>
@@ -141,13 +142,15 @@ const addBtnClass =
 
     <!-- Множественный: развёрнутый список, без ветвления по пунктам -->
     <div v-else-if="isMulti" class="px-1 py-1">
-      <p v-if="!options.length" class="mb-1 px-1 text-[10px] text-ink-500">Отметьте подходящие пункты — добавьте их ниже.</p>
+      <p v-if="!options.length" class="mb-1 px-1 text-[10px] text-ink-500 dark:text-ink-500">
+        Отметьте подходящие пункты — добавьте их ниже.
+      </p>
       <div
         v-for="opt in options"
         :key="opt.id"
-        class="flex min-h-[32px] items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-ink-700/35"
+        class="flex min-h-[32px] items-center gap-2 rounded-lg px-2 py-1.5 hover:bg-ink-100 dark:hover:bg-ink-700/35"
       >
-        <span class="size-1.5 shrink-0 rounded-sm border border-violet-400/90 bg-violet-500/25" aria-hidden="true" />
+        <span class="size-1.5 shrink-0 rounded-sm border border-violet-400/90 bg-violet-500/20 dark:bg-violet-500/25" aria-hidden="true" />
         <input
           :ref="(el) => setOptInputRef(opt.id, el)"
           :value="opt.label"
@@ -160,15 +163,18 @@ const addBtnClass =
         />
       </div>
       <button type="button" :class="addBtnClass" @click="addOptionClick">+ пункт</button>
-      <p v-if="q.nextStep" class="mx-1 mt-1 rounded-md border border-ink-700/40 bg-ink-950/40 px-2 py-1 text-[9px] text-ink-500">
+      <p
+        v-if="q.nextStep"
+        class="mx-1 mt-1 rounded-md border border-ink-200 bg-ink-50 px-2 py-1 text-[9px] text-ink-600 dark:border-ink-700/40 dark:bg-ink-950/40 dark:text-ink-500"
+      >
         Далее: <span class="font-medium text-accent-dim">{{ titleOf(q.nextStep) }}</span>
       </p>
     </div>
 
-    <div v-else-if="q.type === 'slider'" class="px-3 py-2 text-[10px] text-ink-400">
+    <div v-else-if="q.type === 'slider'" class="px-3 py-2 text-[10px] text-ink-600 dark:text-ink-400">
       Диапазон {{ q.min ?? 0 }}–{{ q.max ?? 100 }} · шаг {{ q.step ?? 1 }}
     </div>
-    <div v-else-if="q.nextStep" class="px-3 py-2 text-[10px] text-ink-400">
+    <div v-else-if="q.nextStep" class="px-3 py-2 text-[10px] text-ink-600 dark:text-ink-400">
       Далее: <span class="text-accent-dim">{{ titleOf(q.nextStep) }}</span>
     </div>
 
@@ -178,7 +184,7 @@ const addBtnClass =
       type="source"
       :position="Position.Bottom"
       :connectable="handleConnectable"
-      class="!h-3.5 !w-3.5 !border-2 !border-accent !bg-ink-950 !shadow-md"
+      class="!h-3.5 !w-3.5 !border-2 !border-accent !bg-white !shadow-md dark:!bg-ink-950"
     />
   </div>
 </template>

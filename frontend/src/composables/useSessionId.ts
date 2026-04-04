@@ -8,3 +8,10 @@ export function useSessionId(): string {
   }
   return id;
 }
+
+/** Новый id для воронки после завершённой заявки — иначе второй квиз в той же вкладке перезаписывает ответы в аналитике. */
+export function rotateSessionId(): string {
+  const id = crypto.randomUUID();
+  sessionStorage.setItem(SID_KEY, id);
+  return id;
+}

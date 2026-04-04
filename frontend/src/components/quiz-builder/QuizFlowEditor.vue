@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, markRaw, nextTick, onMounted, onUnmounted, provide, ref, watch } from "vue";
+import { useTheme } from "@/composables/useTheme";
 import {
   VueFlow,
   type Connection,
@@ -14,6 +15,7 @@ import { Controls } from "@vue-flow/controls";
 import "@vue-flow/core/dist/style.css";
 import "@vue-flow/core/dist/theme-default.css";
 import type { QuizBlockType, QuizNode, QuizSchema } from "@/types/quiz-schema";
+import { QUIZ_BLOCK_TYPES } from "@/types/quiz-schema";
 import { defaultFlowPosition, schemaToFlowElements, flowToSchema } from "./schemaFlow";
 import QuizBlockNode from "./nodes/QuizBlockNode.vue";
 import QuizFlowToolbar from "./QuizFlowToolbar.vue";
@@ -21,12 +23,36 @@ import {
   quizCanvasOptionFocusKey,
   quizFlowActionsKey,
   quizIdTitlesKey,
+  QUIZ_PALETTE_DRAG_MIME,
+  quizBlockTypeFromDragData,
   type CanvasOptionFocusRequest,
 } from "./injection";
 
 const props = defineProps<{
   schema: QuizSchema | null;
 }>();
+
+const { isDark } = useTheme();
+
+/**
+ * У draggable-нод Vue Flow вешает класс nopan: жест pan/zoom на холсте для touchstart с цели «нода»
+ * отфильтровывается. На телефоне фона между карточками часто нет — вид «застывает».
+ * Для (pointer: coarse) отключаем drag нод: pan работает по всей области, позиции править с ПК.
+ */
+const nodeDragOnCanvas = ref(true);
+/** Сенсор без точного указателя — показываем кнопки отмены/повтора (нет Ctrl+Z/Y) */
+const isCoarsePointer = ref(false);
+
+function syncNodeDragForPointer(): void {
+  try {
+    const coarse = window.matchMedia("(pointer: coarse)").matches;
+    isCoarsePointer.value = coarse;
+    nodeDragOnCanvas.value = !coarse;
+  } catch {
+    isCoarsePointer.value = false;
+    nodeDragOnCanvas.value = true;
+  }
+}
 
 /** Локальный тип вместо FlowNode<{ quiz: QuizNode }> — иначе TS2589 excessively deep */
 type QuizFlowNode = {
@@ -62,6 +88,13 @@ const lastFlowTapPosition = ref<{ x: number; y: number } | null>(null);
 const vueFlowRef = ref<{ screenToFlowCoordinate?: (p: { x: number; y: number }) => { x: number; y: number } } | null>(
   null,
 );
+/** Область схемы (под VueFlow) — центр экрана → координаты flow для нового блока */
+const flowAreaElRef = ref<HTMLElement | null>(null);
+
+function snapFlowCoord(v: number): number {
+  const g = 16;
+  return Math.round(v / g) * g;
+}
 
 function rememberFlowTap(clientX: number, clientY: number): void {
   const vf = vueFlowRef.value;
@@ -70,10 +103,35 @@ function rememberFlowTap(clientX: number, clientY: number): void {
   lastFlowTapPosition.value = { x: Math.round(flow.x), y: Math.round(flow.y) };
 }
 
+function clientXYFromPointerLike(ev: Event): { x: number; y: number } | null {
+  if ("clientX" in ev && typeof (ev as MouseEvent).clientX === "number") {
+    const m = ev as MouseEvent;
+    return { x: m.clientX, y: m.clientY };
+  }
+  const te = ev as TouchEvent;
+  const t = te.touches?.[0] ?? te.changedTouches?.[0];
+  if (t) return { x: t.clientX, y: t.clientY };
+  return null;
+}
+
 function positionForNewBlock(): { x: number; y: number } {
   const p = lastFlowTapPosition.value;
-  if (p) return { ...p };
-  return defaultFlowPosition(nodes.value.length);
+  if (p) return { x: snapFlowCoord(p.x), y: snapFlowCoord(p.y) };
+
+  const vf = vueFlowRef.value;
+  const wrap = flowAreaElRef.value;
+  if (vf?.screenToFlowCoordinate && wrap) {
+    const r = wrap.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) {
+      const flow = vf.screenToFlowCoordinate({
+        x: r.left + r.width / 2,
+        y: r.top + r.height / 2,
+      });
+      return { x: snapFlowCoord(flow.x), y: snapFlowCoord(flow.y) };
+    }
+  }
+
+  return defaultFlowPosition(Math.min(nodes.value.length, 7));
 }
 
 function captureSchemaSnapshot(): QuizSchema {
@@ -108,6 +166,9 @@ function beginEditBurst(): void {
 }
 
 const nodeTypes = { quizBlock: markRaw(QuizBlockNode) };
+
+const canUndo = computed(() => !historySuspended.value && undoStack.value.length > 0);
+const canRedo = computed(() => !historySuspended.value && redoStack.value.length > 0);
 
 const idToTitles = computed(() => {
   const m: Record<string, string> = {};
@@ -150,13 +211,28 @@ watch(titlesSignature, () => {
   refreshEdgeLabels();
 });
 
-const defaultEdgeOpts = {
+const defaultEdgeOpts = computed(() => ({
   type: "smoothstep" as const,
   style: { stroke: "#c9a962", strokeWidth: 2 },
-  labelStyle: { fill: "#e8e4dc", fontSize: 11, fontWeight: 500 as const },
-  labelBgStyle: { fill: "#1f222d", fillOpacity: 0.92 },
+  labelStyle: isDark.value
+    ? { fill: "#e8e4dc", fontSize: 11, fontWeight: 500 as const }
+    : { fill: "#1a1b20", fontSize: 11, fontWeight: 500 as const },
+  labelBgStyle: isDark.value
+    ? { fill: "#1f222d", fillOpacity: 0.92 }
+    : { fill: "#ffffff", fillOpacity: 0.95 },
   labelBgPadding: [4, 6] as [number, number],
-};
+}));
+
+/** Подписи на связях при переключении светлой/тёмной темы */
+watch(isDark, () => {
+  const lo = defaultEdgeOpts.value;
+  edges.value = edges.value.map((e) => ({
+    ...e,
+    labelStyle: { ...lo.labelStyle },
+    labelBgStyle: { ...lo.labelBgStyle },
+    style: { ...lo.style, ...(e.style && typeof e.style === "object" ? e.style : {}) },
+  })) as Edge[];
+});
 
 function defaultQuiz(type: QuizBlockType, id: string): QuizNode {
   switch (type) {
@@ -192,17 +268,57 @@ function defaultQuiz(type: QuizBlockType, id: string): QuizNode {
   }
 }
 
-function addBlock(type: QuizBlockType): void {
+function addBlock(type: QuizBlockType, atFlowPosition?: { x: number; y: number }): string {
   pushUndoSnapshot();
   const id = `step_${Date.now()}`;
   const quiz = defaultQuiz(type, id);
+  const pos = atFlowPosition
+    ? { x: snapFlowCoord(atFlowPosition.x), y: snapFlowCoord(atFlowPosition.y) }
+    : positionForNewBlock();
   const newNode: QuizFlowNode = {
     id,
     type: "quizBlock",
-    position: positionForNewBlock(),
+    position: pos,
     data: { quiz },
   };
   nodes.value = [...nodes.value, newNode];
+  return id;
+}
+
+function onPaletteStripDragStart(e: DragEvent, t: QuizBlockType): void {
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  dt.setData(QUIZ_PALETTE_DRAG_MIME, t);
+  dt.setData("text/plain", t);
+  dt.effectAllowed = "copy";
+}
+
+function isPaletteDragEvent(dt: DataTransfer): boolean {
+  return dt.types.includes(QUIZ_PALETTE_DRAG_MIME) || dt.types.includes("text/plain");
+}
+
+function onPaletteDragOver(e: DragEvent): void {
+  const dt = e.dataTransfer;
+  if (!dt || !isPaletteDragEvent(dt)) return;
+  e.preventDefault();
+  dt.dropEffect = "copy";
+}
+
+function onPaletteDrop(e: DragEvent): void {
+  const dt = e.dataTransfer;
+  if (!dt) return;
+  const type = quizBlockTypeFromDragData(dt);
+  if (!type) return;
+  e.preventDefault();
+  const vf = vueFlowRef.value;
+  let flowPos: { x: number; y: number };
+  if (vf?.screenToFlowCoordinate) {
+    flowPos = vf.screenToFlowCoordinate({ x: e.clientX, y: e.clientY });
+  } else {
+    flowPos = positionForNewBlock();
+  }
+  const id = addBlock(type, flowPos);
+  selectedId.value = id;
 }
 
 function deleteSelection(): void {
@@ -259,10 +375,13 @@ function hydrateEditorFromSchema(s: QuizSchema | null): void {
     return;
   }
   const { nodes: n, edges: e } = schemaToFlowElements(s);
+  const lo = defaultEdgeOpts.value;
   const withEdgeDefaults = e.map((edge) => ({
-    ...defaultEdgeOpts,
+    ...lo,
     ...edge,
     type: "smoothstep" as const,
+    labelStyle: { ...lo.labelStyle },
+    labelBgStyle: { ...lo.labelBgStyle },
   }));
   nodes.value = n as QuizFlowNode[];
   edges.value = withEdgeDefaults;
@@ -338,7 +457,7 @@ function onConnect(p: Connection): void {
       source: p.source,
       target: p.target,
       sourceHandle: p.sourceHandle || undefined,
-      ...defaultEdgeOpts,
+      ...defaultEdgeOpts.value,
       label: targetLabel(p.target),
     },
   ];
@@ -358,9 +477,12 @@ function onNodeDragStop(ev: NodeDragEvent): void {
 }
 
 function onNodeClick(e: NodeMouseEvent): void {
-  selectedId.value = e.node.id;
   const ev = e.event;
-  if (ev) rememberFlowTap(ev.clientX, ev.clientY);
+  selectedId.value = e.node.id;
+  if (ev) {
+    const xy = clientXYFromPointerLike(ev);
+    if (xy) rememberFlowTap(xy.x, xy.y);
+  }
 }
 
 function onPaneClick(ev: MouseEvent): void {
@@ -558,10 +680,19 @@ function onUndoRedoKeydown(e: KeyboardEvent): void {
   }
 }
 
+let coarsePointerMq: MediaQueryList | null = null;
+const onCoarsePointerChange = () => syncNodeDragForPointer();
+
 onMounted(() => {
+  syncNodeDragForPointer();
+  if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+    coarsePointerMq = window.matchMedia("(pointer: coarse)");
+    coarsePointerMq.addEventListener("change", onCoarsePointerChange);
+  }
   document.addEventListener("keydown", onUndoRedoKeydown, true);
 });
 onUnmounted(() => {
+  coarsePointerMq?.removeEventListener("change", onCoarsePointerChange);
   document.removeEventListener("keydown", onUndoRedoKeydown, true);
 });
 
@@ -570,14 +701,70 @@ defineExpose({ getSchema });
 
 <template>
   <div class="grid gap-5 lg:grid-cols-[1fr_308px]">
-    <div
-      class="vue-flow-wrap relative h-[min(74vh,760px)] min-h-[460px] overflow-hidden rounded-2xl border border-ink-500/60 bg-[#0c0e14] shadow-inner"
-    >
+    <div class="flex min-w-0 flex-col gap-2">
+      <div
+        class="flex flex-wrap items-end gap-2 rounded-xl border border-ink-200 bg-white/95 p-2.5 shadow-md dark:border-ink-600/80 dark:bg-ink-900/95"
+      >
+        <div class="flex min-w-0 flex-1 flex-wrap gap-1.5">
+          <span
+            class="w-full text-[9px] font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-500"
+          >
+            Добавить блок
+          </span>
+          <button
+            v-for="bt in QUIZ_BLOCK_TYPES"
+            :key="bt.value"
+            type="button"
+            draggable="true"
+            class="cursor-grab touch-none rounded-lg bg-ink-100 px-2.5 py-1.5 text-[11px] font-medium text-ink-900 transition hover:bg-accent hover:text-ink-950 active:cursor-grabbing dark:bg-ink-800 dark:text-ink-100 dark:hover:bg-accent dark:hover:text-ink-950"
+            @click="addBlock(bt.value)"
+            @dragstart="onPaletteStripDragStart($event, bt.value)"
+          >
+            {{ bt.label }}
+          </button>
+        </div>
+        <p class="max-w-[220px] text-[10px] leading-snug text-ink-500 dark:text-ink-500 max-sm:hidden">
+          Перетащите тип блока на схему ниже или нажмите для авто-позиции.
+        </p>
+        <div
+          v-if="isCoarsePointer"
+          class="flex w-full flex-wrap items-center gap-2 border-t border-ink-200 pt-2.5 dark:border-ink-600"
+        >
+          <span
+            class="w-full text-[9px] font-semibold uppercase tracking-wider text-ink-500 dark:text-ink-500"
+          >
+            История (как Ctrl+Z / Ctrl+Y на ПК)
+          </span>
+          <button
+            type="button"
+            class="min-h-10 min-w-0 flex-1 rounded-lg border border-ink-200 bg-white px-3 py-2 text-xs font-medium text-ink-900 active:bg-ink-100 disabled:pointer-events-none disabled:opacity-40 dark:border-ink-600 dark:bg-ink-900 dark:text-ink-100 dark:active:bg-ink-800"
+            :disabled="!canUndo"
+            @click="undo()"
+          >
+            Отменить
+          </button>
+          <button
+            type="button"
+            class="min-h-10 min-w-0 flex-1 rounded-lg border border-ink-200 bg-white px-3 py-2 text-xs font-medium text-ink-900 active:bg-ink-100 disabled:pointer-events-none disabled:opacity-40 dark:border-ink-600 dark:bg-ink-900 dark:text-ink-100 dark:active:bg-ink-800"
+            :disabled="!canRedo"
+            @click="redo()"
+          >
+            Вернуть
+          </button>
+        </div>
+      </div>
+      <div
+        ref="flowAreaElRef"
+        class="vue-flow-wrap relative isolate h-[min(74vh,760px)] min-h-[360px] overflow-hidden overscroll-contain rounded-2xl border border-ink-300 bg-ink-100 shadow-inner dark:border-ink-500/60 dark:bg-[#0c0e14] sm:min-h-[460px]"
+        @dragover.capture="onPaletteDragOver"
+        @drop.capture="onPaletteDrop"
+      >
       <VueFlow
         ref="vueFlowRef"
         v-model:nodes="nodes"
         v-model:edges="edges"
         :node-types="nodeTypes"
+        :nodes-draggable="nodeDragOnCanvas"
         :default-viewport="{ zoom: 0.88, x: 20, y: 12 }"
         :default-edge-options="defaultEdgeOpts"
         :min-zoom="0.15"
@@ -585,6 +772,9 @@ defineExpose({ getSchema });
         :snap-to-grid="true"
         :snap-grid="[16, 16]"
         :delete-key-code="['Backspace', 'Delete']"
+        :pan-on-drag="true"
+        :zoom-on-pinch="true"
+        :zoom-on-scroll="true"
         class="quiz-vue-flow"
         @connect="onConnect"
         @node-drag-stop="onNodeDragStop"
@@ -593,51 +783,69 @@ defineExpose({ getSchema });
         @nodesChange="onFlowNodesChange"
         @edgesChange="onFlowEdgesChange"
       >
-        <Background :gap="22" pattern-color="#2a2e3d" :size="1.2" />
+        <Background :gap="22" pattern-color="#c4c5cd" :size="1.2" class="dark:hidden" />
+        <Background :gap="22" pattern-color="#2a2e3d" :size="1.2" class="hidden dark:block" />
         <Controls :show-interactive="false" class="controls-dark !m-2.5" />
         <QuizFlowToolbar />
       </VueFlow>
-      <p class="pointer-events-none absolute bottom-3 left-4 right-4 text-center text-[10px] leading-relaxed text-ink-500">
+      <p
+        class="pointer-events-none absolute bottom-3 left-4 right-4 text-center text-[10px] leading-relaxed text-ink-600 dark:text-ink-500"
+      >
+        <span class="sm:hidden">
+          Пальцем по схеме — сдвиг и масштаб (щипок). Перетаскивать сами блоки на телефоне нельзя — только с ПК/мыши.
+        </span>
         Перетаскивайте карточки — координаты сохраняются при «Сохранить схему» · тяните линию от
-        <span class="text-accent-dim">янтарной точки</span>
+        <span class="font-medium text-accent-dim dark:text-accent-dim">янтарной точки</span>
         к следующему блоку ·
-        <span class="text-ink-400">Backspace / Delete</span>
+        <span class="text-ink-700 dark:text-ink-400">Backspace / Delete</span>
         или кнопка «Выбранные»
-        · <span class="text-ink-400">Ctrl+Z</span> отмена · <span class="text-ink-400">Ctrl+Y</span> / <span class="text-ink-400">Ctrl+Shift+Z</span> повтор
+        · <span class="text-ink-700 dark:text-ink-400">Ctrl+Z</span> отмена ·
+        <span class="text-ink-700 dark:text-ink-400">Ctrl+Y</span> /
+        <span class="text-ink-700 dark:text-ink-400">Ctrl+Shift+Z</span> повтор
+        · с палитры сверху перетащите тип блока на схему
       </p>
+      </div>
     </div>
 
-    <aside class="space-y-4 rounded-2xl border border-ink-600/80 bg-gradient-to-b from-ink-900/90 to-ink-950/90 p-4 shadow-xl">
-      <h3 class="font-display text-sm font-semibold tracking-tight text-white">Свойства блока</h3>
-      <p v-if="!selectedQuiz" class="text-xs leading-relaxed text-ink-500">Выберите карточку на схеме. Удаление: клавиши Backspace/Delete, кнопка на canvas или ниже.</p>
+    <aside
+      class="space-y-4 rounded-2xl border border-ink-200 bg-gradient-to-b from-white to-ink-50 p-4 shadow-xl dark:border-ink-600/80 dark:from-ink-900/90 dark:to-ink-950/90"
+    >
+      <h3 class="font-display text-sm font-semibold tracking-tight text-ink-950 dark:text-white">Свойства блока</h3>
+      <p v-if="!selectedQuiz" class="text-xs leading-relaxed text-ink-600 dark:text-ink-500">
+        Выберите карточку на схеме. Удаление: клавиши Backspace/Delete, кнопка на canvas или ниже.
+      </p>
       <template v-else>
         <div class="flex flex-wrap gap-2">
           <button
             type="button"
-            class="rounded-lg border border-red-900/50 bg-red-950/30 px-3 py-1.5 text-xs font-medium text-red-200 hover:bg-red-900/40"
+            class="rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-800 hover:bg-red-100 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200 dark:hover:bg-red-900/40"
             @click="deleteCurrentBlock"
           >
             Удалить этот блок
           </button>
         </div>
-        <label class="block text-[11px] text-ink-400">
+        <label class="block text-[11px] text-ink-600 dark:text-ink-400">
           Внутренний ID
-          <input :value="selectedQuiz.id" disabled class="mt-1 w-full rounded-lg border border-ink-600 bg-ink-950 px-2 py-1.5 font-mono text-[11px] text-ink-500" />
+          <input
+            :value="selectedQuiz.id"
+            disabled
+            class="mt-1 w-full rounded-lg border border-ink-200 bg-ink-50 px-2 py-1.5 font-mono text-[11px] text-ink-600 dark:border-ink-600 dark:bg-ink-950 dark:text-ink-500"
+          />
         </label>
-        <label class="block text-[11px] text-ink-400">
+        <label class="block text-[11px] text-ink-600 dark:text-ink-400">
           Заголовок на карточке
           <input
             :value="selectedQuiz.title ?? ''"
-            class="mt-1 w-full rounded-lg border border-ink-600 bg-ink-950 px-2 py-1.5 text-sm text-white placeholder:text-ink-600 focus:border-accent focus:outline-none"
+            class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-950 placeholder:text-ink-500 focus:border-accent focus:outline-none dark:border-ink-600 dark:bg-ink-950 dark:text-white dark:placeholder:text-ink-600"
             placeholder="Например: Зоны"
             @input="setTitle(($event.target as HTMLInputElement).value)"
           />
         </label>
-        <label class="block text-[11px] text-ink-400">
+        <label class="block text-[11px] text-ink-600 dark:text-ink-400">
           Тип
           <select
             :value="selectedQuiz.type"
-            class="mt-1 w-full rounded-lg border border-ink-600 bg-ink-950 px-2 py-1.5 text-sm text-white focus:border-accent focus:outline-none"
+            class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-950 focus:border-accent focus:outline-none dark:border-ink-600 dark:bg-ink-950 dark:text-white"
             @change="changeType(($event.target as HTMLSelectElement).value as QuizBlockType)"
           >
             <option value="single">Одиночный выбор</option>
@@ -650,39 +858,39 @@ defineExpose({ getSchema });
 
         <template v-if="selectedQuiz.type === 'slider'">
           <div class="grid grid-cols-2 gap-2">
-            <label class="text-[11px] text-ink-400"
+            <label class="text-[11px] text-ink-600 dark:text-ink-400"
               >Min
               <input
                 :value="selectedQuiz.min ?? 0"
                 type="number"
-                class="mt-1 w-full rounded-lg border border-ink-600 bg-ink-950 px-2 py-1 text-xs text-white"
+                class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1 text-xs text-ink-950 dark:border-ink-600 dark:bg-ink-950 dark:text-white"
                 @change="setSliderMin(Number(($event.target as HTMLInputElement).value))"
               />
             </label>
-            <label class="text-[11px] text-ink-400"
+            <label class="text-[11px] text-ink-600 dark:text-ink-400"
               >Max
               <input
                 :value="selectedQuiz.max ?? 100"
                 type="number"
-                class="mt-1 w-full rounded-lg border border-ink-600 bg-ink-950 px-2 py-1 text-xs text-white"
+                class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1 text-xs text-ink-950 dark:border-ink-600 dark:bg-ink-950 dark:text-white"
                 @change="setSliderMax(Number(($event.target as HTMLInputElement).value))"
               />
             </label>
-            <label class="text-[11px] text-ink-400"
+            <label class="text-[11px] text-ink-600 dark:text-ink-400"
               >Шаг
               <input
                 :value="selectedQuiz.step ?? 1"
                 type="number"
-                class="mt-1 w-full rounded-lg border border-ink-600 bg-ink-950 px-2 py-1 text-xs text-white"
+                class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1 text-xs text-ink-950 dark:border-ink-600 dark:bg-ink-950 dark:text-white"
                 @change="setSliderStep(Number(($event.target as HTMLInputElement).value))"
               />
             </label>
-            <label class="text-[11px] text-ink-400"
+            <label class="text-[11px] text-ink-600 dark:text-ink-400"
               >По умолчанию
               <input
                 :value="selectedQuiz.default ?? 0"
                 type="number"
-                class="mt-1 w-full rounded-lg border border-ink-600 bg-ink-950 px-2 py-1 text-xs text-white"
+                class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1 text-xs text-ink-950 dark:border-ink-600 dark:bg-ink-950 dark:text-white"
                 @change="setSliderDefault(Number(($event.target as HTMLInputElement).value))"
               />
             </label>
@@ -691,24 +899,34 @@ defineExpose({ getSchema });
 
         <template v-if="(selectedQuiz.type === 'single' || selectedQuiz.type === 'multi') && selectedQuiz.options">
           <div class="flex items-center justify-between">
-            <span class="text-[11px] font-medium text-ink-400">Варианты</span>
+            <span class="text-[11px] font-medium text-ink-600 dark:text-ink-400">Варианты</span>
             <button type="button" class="text-[11px] font-medium text-accent hover:underline" @click="addOption">+ вариант</button>
           </div>
           <div class="max-h-52 space-y-2 overflow-y-auto pr-0.5">
-            <div v-for="(opt, idx) in selectedQuiz.options" :key="opt.id" class="rounded-xl border border-ink-700 bg-ink-950/70 p-2.5">
+            <div
+              v-for="(opt, idx) in selectedQuiz.options"
+              :key="opt.id"
+              class="rounded-xl border border-ink-200 bg-ink-50 p-2.5 dark:border-ink-700 dark:bg-ink-950/70"
+            >
               <div class="flex gap-1.5">
                 <input
                   :value="opt.label"
-                  class="min-w-0 flex-1 rounded-lg border border-ink-600 bg-ink-900 px-2 py-1 text-xs text-white"
+                  class="min-w-0 flex-1 rounded-lg border border-ink-200 bg-white px-2 py-1 text-xs text-ink-950 dark:border-ink-600 dark:bg-ink-900 dark:text-white"
                   @input="setOptionLabel(idx, ($event.target as HTMLInputElement).value)"
                 />
-                <button type="button" class="shrink-0 rounded px-2 text-red-400 hover:bg-red-950/50" @click="removeOption(idx)">×</button>
+                <button
+                  type="button"
+                  class="shrink-0 rounded px-2 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-950/50"
+                  @click="removeOption(idx)"
+                >
+                  ×
+                </button>
               </div>
-              <label v-if="selectedQuiz.type === 'single'" class="mt-2 block text-[10px] text-ink-500">
+              <label v-if="selectedQuiz.type === 'single'" class="mt-2 block text-[10px] text-ink-600 dark:text-ink-500">
                 Следующий шаг (или соедините линией с карточки)
                 <select
                   :value="opt.nextStep ?? ''"
-                  class="mt-1 w-full rounded-lg border border-ink-600 bg-ink-900 px-2 py-1 text-xs text-white"
+                  class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1 text-xs text-ink-950 dark:border-ink-600 dark:bg-ink-900 dark:text-white"
                   @change="setOptionNext(idx, ($event.target as HTMLSelectElement).value)"
                 >
                   <option value="">— не выбрано —</option>
@@ -719,11 +937,11 @@ defineExpose({ getSchema });
           </div>
         </template>
 
-        <label v-if="selectedQuiz.type !== 'single'" class="block text-[11px] text-ink-400">
+        <label v-if="selectedQuiz.type !== 'single'" class="block text-[11px] text-ink-600 dark:text-ink-400">
           Следующий шаг
           <select
             :value="selectedQuiz.nextStep ?? ''"
-            class="mt-1 w-full rounded-lg border border-ink-600 bg-ink-950 px-2 py-1.5 text-sm text-white"
+            class="mt-1 w-full rounded-lg border border-ink-200 bg-white px-2 py-1.5 text-sm text-ink-950 dark:border-ink-600 dark:bg-ink-950 dark:text-white"
             @change="setNextStep(($event.target as HTMLSelectElement).value)"
           >
             <option value="">— не выбрано —</option>
@@ -736,6 +954,17 @@ defineExpose({ getSchema });
 </template>
 
 <style scoped>
+/* Явно отдаём жесты зум/пан D3: на мобилке родительский overflow-x и браузерный scroll иначе перехватывают касание. */
+.quiz-vue-flow :deep(.vue-flow__viewport),
+.quiz-vue-flow :deep(.vue-flow__pane),
+.quiz-vue-flow :deep(.vue-flow__renderer) {
+  touch-action: none;
+}
+.quiz-vue-flow :deep(.vue-flow__node input),
+.quiz-vue-flow :deep(.vue-flow__node textarea),
+.quiz-vue-flow :deep(.vue-flow__node select) {
+  touch-action: manipulation;
+}
 .quiz-vue-flow :deep(.vue-flow__edge-text) {
   font-weight: 500;
 }
@@ -743,12 +972,21 @@ defineExpose({ getSchema });
   stroke-linecap: round;
 }
 .controls-dark :deep(button) {
-  background: rgb(30 32 42 / 0.95);
-  border: 1px solid rgb(60 64 78);
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #d5d6db;
   border-radius: 8px;
-  color: #c4c8d4;
+  color: #1a1b20;
 }
 .controls-dark :deep(button:hover) {
+  background: #ececee;
+  color: #0f1014;
+}
+:global(.dark) .controls-dark :deep(button) {
+  background: rgb(30 32 42 / 0.95);
+  border: 1px solid rgb(60 64 78);
+  color: #c4c8d4;
+}
+:global(.dark) .controls-dark :deep(button:hover) {
   background: rgb(45 48 60);
   color: #fff;
 }

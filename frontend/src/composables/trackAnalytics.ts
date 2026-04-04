@@ -5,16 +5,21 @@ export async function trackEvent(
   eventType: string,
   stepKey?: string,
   payload?: Record<string, unknown>,
+  quizSchemaId?: number | null,
 ): Promise<void> {
   try {
+    const body: Record<string, unknown> = {
+      session_id: sessionId,
+      event_type: eventType,
+      step_key: stepKey ?? null,
+      payload: payload ?? null,
+    };
+    if (quizSchemaId != null && quizSchemaId > 0) {
+      body.quiz_schema_id = quizSchemaId;
+    }
     await api("/analytics/track", {
       method: "POST",
-      json: {
-        session_id: sessionId,
-        event_type: eventType,
-        step_key: stepKey ?? null,
-        payload: payload ?? null,
-      },
+      json: body,
     });
   } catch {
     /* не блокируем квиз */

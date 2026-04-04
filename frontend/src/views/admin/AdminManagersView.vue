@@ -13,7 +13,7 @@ interface ManagerStats {
   id: string;
   email: string;
   full_name: string;
-  taken_count: number;
+  in_progress_count: number;
   completed_count: number;
   conversion_percent: number;
 }
@@ -63,15 +63,30 @@ function statFor(id: string): ManagerStats | undefined {
 
 <template>
   <div class="space-y-8">
-    <h1 class="font-display text-2xl font-semibold">Менеджеры</h1>
-    <p v-if="error" class="text-red-400">{{ error }}</p>
+    <h1 class="font-display text-2xl font-semibold text-ink-950 dark:text-white">Менеджеры</h1>
+    <p v-if="error" class="text-red-600 dark:text-red-400">{{ error }}</p>
 
-    <div class="rounded-2xl border border-ink-800 bg-ink-900/50 p-6">
-      <h2 class="font-display text-lg font-semibold text-white">Новый менеджер</h2>
+    <div class="rounded-2xl border border-ink-200 bg-white p-6 dark:border-ink-800 dark:bg-ink-900/50">
+      <h2 class="font-display text-lg font-semibold text-ink-950 dark:text-white">Новый менеджер</h2>
       <div class="mt-4 grid gap-3 sm:grid-cols-3">
-        <input v-model="name" type="text" placeholder="Имя" class="rounded-xl border border-ink-700 bg-ink-950 px-3 py-2 text-sm" />
-        <input v-model="email" type="email" placeholder="Email" class="rounded-xl border border-ink-700 bg-ink-950 px-3 py-2 text-sm" />
-        <input v-model="password" type="password" placeholder="Пароль" class="rounded-xl border border-ink-700 bg-ink-950 px-3 py-2 text-sm" />
+        <input
+          v-model="name"
+          type="text"
+          placeholder="Имя"
+          class="rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-950 dark:border-ink-700 dark:bg-ink-950 dark:text-white"
+        />
+        <input
+          v-model="email"
+          type="email"
+          placeholder="Email"
+          class="rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-950 dark:border-ink-700 dark:bg-ink-950 dark:text-white"
+        />
+        <input
+          v-model="password"
+          type="password"
+          placeholder="Пароль"
+          class="rounded-xl border border-ink-200 bg-white px-3 py-2 text-sm text-ink-950 dark:border-ink-700 dark:bg-ink-950 dark:text-white"
+        />
       </div>
       <button
         type="button"
@@ -83,22 +98,26 @@ function statFor(id: string): ManagerStats | undefined {
       </button>
     </div>
 
-    <div class="overflow-x-auto rounded-2xl border border-ink-800">
+    <div class="overflow-x-auto rounded-2xl border border-ink-200 dark:border-ink-800">
       <table class="min-w-full text-left text-sm">
-        <thead class="border-b border-ink-800 bg-ink-900 text-ink-400">
+        <thead class="border-b border-ink-200 bg-ink-100 text-ink-700 dark:border-ink-800 dark:bg-ink-900 dark:text-ink-400">
           <tr>
             <th class="px-4 py-3">Имя</th>
             <th class="px-4 py-3">Email</th>
-            <th class="px-4 py-3">Взял</th>
-            <th class="px-4 py-3">Закрыл</th>
+            <th class="px-4 py-3">В работе</th>
+            <th class="px-4 py-3">Завершено</th>
             <th class="px-4 py-3">Конверсия %</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="m in managers" :key="m.id" class="border-b border-ink-800/80">
-            <td class="px-4 py-3 font-medium text-white">{{ m.full_name }}</td>
-            <td class="px-4 py-3 text-ink-300">{{ m.email }}</td>
-            <td class="px-4 py-3">{{ statFor(m.id)?.taken_count ?? 0 }}</td>
+          <tr
+            v-for="m in managers"
+            :key="m.id"
+            class="border-b border-ink-200 bg-white text-ink-900 dark:border-ink-800/80 dark:bg-ink-950/40 dark:text-ink-100"
+          >
+            <td class="px-4 py-3 font-medium">{{ m.full_name }}</td>
+            <td class="px-4 py-3 text-ink-600 dark:text-ink-300">{{ m.email }}</td>
+            <td class="px-4 py-3">{{ statFor(m.id)?.in_progress_count ?? 0 }}</td>
             <td class="px-4 py-3">{{ statFor(m.id)?.completed_count ?? 0 }}</td>
             <td class="px-4 py-3">{{ statFor(m.id)?.conversion_percent ?? 0 }}</td>
           </tr>

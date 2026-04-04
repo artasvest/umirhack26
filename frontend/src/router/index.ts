@@ -23,7 +23,9 @@ const router = createRouter({
       children: [
         { path: "", name: "admin-home", component: () => import("@/views/admin/AdminHomeView.vue") },
         { path: "managers", name: "admin-managers", component: () => import("@/views/admin/AdminManagersView.vue") },
+        { path: "leads", name: "admin-leads", component: () => import("@/views/admin/AdminLeadsView.vue") },
         { path: "analytics", name: "admin-analytics", component: () => import("@/views/admin/AdminAnalyticsView.vue") },
+        { path: "quizzes", name: "admin-quizzes", component: () => import("@/views/admin/AdminQuizzesView.vue") },
         { path: "quiz", name: "admin-quiz", component: () => import("@/views/admin/AdminQuizBuilderView.vue") },
       ],
     },

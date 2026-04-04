@@ -1,12 +1,20 @@
 const TOKEN_KEY = "studio_jwt";
+const USER_ID_KEY = "studio_user_id";
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
+export function getUserId(): string | null {
+  return localStorage.getItem(USER_ID_KEY);
+}
+
 export function setToken(token: string | null): void {
   if (token) localStorage.setItem(TOKEN_KEY, token);
-  else localStorage.removeItem(TOKEN_KEY);
+  else {
+    localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(USER_ID_KEY);
+  }
 }
 
 export type LeadStatus = "pending" | "in_progress" | "completed";
@@ -16,6 +24,7 @@ export interface LeadPublic {
   request_number: string;
   status: LeadStatus;
   answers: Record<string, unknown>;
+  ai_summary_client?: string | null;
   updated_at?: string | null;
 }
 
@@ -28,11 +37,17 @@ export interface LeadManagerDetail {
   consent: boolean;
   answers: Record<string, unknown>;
   ai_summary: string | null;
+  ai_summary_client?: string | null;
   call_script: string | null;
   status: LeadStatus;
   assigned_manager_id: string | null;
   created_at: string;
   updated_at: string | null;
+  pool_entered_at?: string | null;
+  callback_at?: string | null;
+  callback_note?: string | null;
+  page_url?: string | null;
+  utm_source?: string | null;
   notes: NoteOut[];
   request_number: string;
 }
@@ -53,6 +68,11 @@ export interface LeadListItem {
   budget: string | null;
   status: LeadStatus;
   created_at: string;
+  assigned_manager_id?: string | null;
+  assigned_manager_name?: string | null;
+  pool_entered_at?: string | null;
+  callback_at?: string | null;
+  callback_note?: string | null;
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -91,10 +111,14 @@ export async function api<T>(
 }
 
 export async function loginRequest(email: string, password: string) {
-  return api<{ access_token: string; role: string; full_name: string }>("/auth/login", {
+  return api<{ access_token: string; role: string; full_name: string; user_id: string }>("/auth/login", {
     method: "POST",
     json: { email, password },
   });
+}
+
+export async function requestTelegramLink() {
+  return api<{ url: string; expires_at: string }>("/auth/telegram-link", { method: "POST" });
 }
 
 export function statusLabelRu(s: LeadStatus): string {

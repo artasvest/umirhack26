@@ -1,8 +1,19 @@
 import type { ComputedRef, InjectionKey, Ref } from "vue";
 import type { QuizBlockType } from "@/types/quiz-schema";
 
+/** MIME для drag-and-drop типа блока с палитры в конструктор */
+export const QUIZ_PALETTE_DRAG_MIME = "application/x-quiz-block-type";
+
+const ALLOWED_BLOCK_TYPES = new Set<QuizBlockType>(["single", "multi", "slider", "form", "ai_summary"]);
+
+export function quizBlockTypeFromDragData(dt: DataTransfer): QuizBlockType | null {
+  const v = dt.getData(QUIZ_PALETTE_DRAG_MIME) || dt.getData("text/plain");
+  if (!v || !ALLOWED_BLOCK_TYPES.has(v as QuizBlockType)) return null;
+  return v as QuizBlockType;
+}
+
 export type QuizFlowActions = {
-  addBlock: (type: QuizBlockType) => void;
+  addBlock: (type: QuizBlockType, atFlowPosition?: { x: number; y: number }) => string;
   deleteSelection: () => void;
   /** Добавить вариант/пункт прямо на карточке (single/multi) */
   addCanvasOption: (nodeId: string) => void;

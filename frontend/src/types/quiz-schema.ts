@@ -10,6 +10,8 @@ export interface QuizOption {
 export interface QuizNode {
   id: string;
   type: QuizBlockType;
+  /** Номер для полосы прогресса (1…N). Важен при ветках: прыжок на «9-й» экран → 9/N, а не глубина стека. */
+  displayOrder?: number;
   title?: string;
   options?: QuizOption[];
   min?: number;

@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { RouterLink } from "vue-router";
 import QRCode from "qrcode";
 import { api } from "@/api/client";
 import type { QuizNode, QuizOption, QuizSchema } from "@/types/quiz-schema";
-import { useSessionId } from "@/composables/useSessionId";
+import { rotateSessionId, useSessionId } from "@/composables/useSessionId";
 import {
   clearPersisted,
   loadPersisted,
@@ -12,6 +13,11 @@ import {
   type QuizStepEntry,
 } from "@/composables/useQuizPersistence";
 import { trackEvent } from "@/composables/trackAnalytics";
+import {
+  loadLastSubmittedLead,
+  saveLastSubmittedLead,
+  type LastSubmittedLead,
+} from "@/composables/useLastSubmittedLead";
 
 interface QuizSchemaApiRow {
   id: number;
@@ -40,6 +46,34 @@ function fingerprint(schema: QuizSchema): string {
   }
 }
 
+const ANALYTICS_VIEWS_KEY = "studio_analytics_step_views_v1";
+
+function readStoredStepViews(sid: string, fp: string): Set<string> {
+  try {
+    const raw = sessionStorage.getItem(ANALYTICS_VIEWS_KEY);
+    if (!raw) return new Set();
+    const o = JSON.parse(raw) as { sessionId?: string; fingerprint?: string; keys?: string[] };
+    if (o.sessionId !== sid || o.fingerprint !== fp) return new Set();
+    return new Set(Array.isArray(o.keys) ? o.keys : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function writeStoredStepViews(sid: string, fp: string, keys: Set<string>): void {
+  try {
+    sessionStorage.setItem(
+      ANALYTICS_VIEWS_KEY,
+      JSON.stringify({ sessionId: sid, fingerprint: fp, keys: [...keys] }),
+    );
+  } catch {
+    /* ignore quota */
+  }
+}
+
+/** Уже отправленные step_view за эту вкладку (sessionStorage + смена схемы сбрасывает). */
+let stepViewSentKeys = new Set<string>();
+
 function findStartNodeId(schema: QuizSchema): string | null {
   const nodes = schema.nodes ?? [];
   if (!nodes.length) return null;
@@ -62,7 +96,94 @@ function resolveNext(schema: QuizSchema, node: QuizNode, opt?: QuizOption): stri
   return edge?.to ?? null;
 }
 
-const sessionId = useSessionId();
+/** Все возможные следующие узлы (как в схеме) — для оценки оставшегося пути. */
+function outgoingTargets(schema: QuizSchema, node: QuizNode): string[] {
+  const out = new Set<string>();
+  for (const e of schema.edges ?? []) {
+    if (e.from === node.id) out.add(e.to);
+  }
+  if (node.type === "single" && node.options?.length) {
+    for (const o of node.options) {
+      if (o.nextStep) out.add(o.nextStep);
+    }
+  }
+  if (node.nextStep) out.add(node.nextStep);
+  return [...out];
+}
+
+/**
+ * Сколько экранов осталось пройти после `fromId` до формы контактов по кратчайшему пути.
+ * Учитывается сам экран form (последний шаг квиза). Блок ИИ-резюме (ai_summary) — обычный экран, не вырезается.
+ */
+function countScreensToFormShortestAfter(schema: QuizSchema, fromId: string): number {
+  const fromNode = nodeById(schema, fromId);
+  if (!fromNode || fromNode.type === "form") return 0;
+
+  const q: string[] = [fromId];
+  const parent = new Map<string, string | null>();
+  parent.set(fromId, null);
+  let formReach: string | null = null;
+
+  while (q.length) {
+    const u = q.shift()!;
+    const nu = nodeById(schema, u);
+    if (nu?.type === "form") {
+      formReach = u;
+      break;
+    }
+    const nodeU = nodeById(schema, u);
+    if (!nodeU) continue;
+    for (const v of outgoingTargets(schema, nodeU)) {
+      if (!parent.has(v)) {
+        parent.set(v, u);
+        q.push(v);
+      }
+    }
+  }
+
+  if (!formReach) return 0;
+
+  const path: string[] = [];
+  let x: string | null = formReach;
+  while (x != null) {
+    path.push(x);
+    x = parent.get(x) ?? null;
+  }
+  path.reverse();
+  return Math.max(0, path.length - 1);
+}
+
+/** Макс. число экранов после `fromId` до form по самому длинному пути (form считается; ai_summary — тоже). */
+function countScreensToFormLongestAfter(schema: QuizSchema, fromId: string): number {
+  const fromNode = nodeById(schema, fromId);
+  if (!fromNode || fromNode.type === "form") return 0;
+
+  const memo = new Map<string, number>();
+
+  function dfs(u: string, visiting: Set<string>): number {
+    const hit = memo.get(u);
+    if (hit !== undefined) return hit;
+    if (visiting.has(u)) return 0;
+    const nu = nodeById(schema, u);
+    if (!nu || nu.type === "form") return 0;
+
+    visiting.add(u);
+    let best = 0;
+    for (const v of outgoingTargets(schema, nu)) {
+      const nv = nodeById(schema, v);
+      if (!nv) continue;
+      const add = nv.type === "form" ? 1 : 1 + dfs(v, visiting);
+      best = Math.max(best, add);
+    }
+    visiting.delete(u);
+    memo.set(u, best);
+    return best;
+  }
+
+  return dfs(fromId, new Set());
+}
+
+let sessionId = useSessionId();
 const persistedSnap = loadPersisted();
 
 const schemaRaw = ref<QuizSchema | null>(null);
@@ -70,6 +191,8 @@ const schemaLoading = ref(true);
 const schemaError = ref("");
 const flowError = ref("");
 const successDone = ref(false);
+/** Последняя отправленная заявка в этом браузере — ссылка в шапке без повторного сканирования QR */
+const lastSubmittedLead = ref<LastSubmittedLead | null>(null);
 
 const navStack = ref<string[]>([]);
 const stepsCompleted = ref<QuizStepEntry[]>([]);
@@ -89,6 +212,8 @@ const summaryLoading = ref(false);
 const imgError = ref<Record<string, boolean>>({});
 
 const schemaFp = ref("");
+/** id строки quiz_schema с сервера (для аналитики и заявки); 0 = нет привязки */
+const quizSchemaRowId = ref<number | null>(null);
 
 const schema = computed(() => schemaRaw.value);
 
@@ -103,33 +228,27 @@ const currentNode = computed((): QuizNode | null => {
   return nodeById(s, id) ?? null;
 });
 
-/** step5 → 5; для ветвления без увеличения глубины стека */
-function parseStepOrdinalFromId(nodeId: string): number | null {
-  const m = /^step(\d+)$/i.exec(nodeId.trim());
-  if (!m) return null;
-  const n = parseInt(m[1], 10);
-  return Number.isFinite(n) && n > 0 ? n : null;
-}
+/** Текущий шаг = сколько экранов уже открыли по пути. */
+const progressStepDisplay = computed(() => Math.max(1, navStack.value.length));
 
+/**
+ * Знаменатель = число экранов от старта до формы включительно (вопросы + ai_summary + form).
+ * На короткой ветке — «пройдено + кратчайший остаток до form», если до длиннейшего пути уже не дотянуть.
+ */
 const progressDenominator = computed(() => {
-  const nodes = schema.value?.nodes ?? [];
-  if (!nodes.length) return 1;
-  const ordinals = nodes
-    .map((n) => parseStepOrdinalFromId(n.id))
-    .filter((x): x is number => x != null);
-  const maxOrd = ordinals.length ? Math.max(...ordinals) : 0;
-  return Math.max(maxOrd, nodes.length, 1);
-});
-
-const progressStepDisplay = computed(() => {
+  const s = schema.value;
   const id = currentNodeId.value;
-  const nodes = schema.value?.nodes ?? [];
-  if (!id || !nodes.length) return 1;
-  const parsed = parseStepOrdinalFromId(id);
-  if (parsed != null) return parsed;
-  const idx = nodes.findIndex((n) => n.id === id);
-  if (idx >= 0) return idx + 1;
-  return Math.max(1, navStack.value.length);
+  const depth = Math.max(1, navStack.value.length);
+  if (!s || !id) return depth;
+  const start = findStartNodeId(s);
+  if (!start) return depth;
+
+  const longestFromStart = Math.max(1, 1 + countScreensToFormLongestAfter(s, start));
+  const minTotal = depth + countScreensToFormShortestAfter(s, id);
+  const maxStillPossible = depth + countScreensToFormLongestAfter(s, id);
+
+  if (maxStillPossible < longestFromStart) return Math.max(1, minTotal);
+  return longestFromStart;
 });
 
 const progressPercent = computed(() => {
@@ -144,13 +263,57 @@ function stepKey(): string {
   return currentNodeId.value ?? "init";
 }
 
-async function emitView(): Promise<void> {
-  await trackEvent(sessionId, "step_view", stepKey());
+/** Ответы по узлам строго выше `curNodeId` в текущем navStack (как контекст ветки). */
+function ancestorAnswersBeforeNode(curNodeId: string): Record<string, unknown> {
+  const ids = navStack.value;
+  const idx = ids.lastIndexOf(curNodeId);
+  if (idx < 0) return {};
+  const anc: Record<string, unknown> = {};
+  for (let i = 0; i < idx; i++) {
+    const id = ids[i]!;
+    if (id in answersByNode.value) anc[id] = answersByNode.value[id];
+  }
+  return anc;
 }
 
-function onBeforeUnload(): void {
-  void trackEvent(sessionId, "step_drop", stepKey());
+/**
+ * Один step_view на шаг (step_key) за сессию вкладки и версию схемы: назад/смена ответа/F5
+ * не раздувают просмотры. Множество шагов хранится в sessionStorage.
+ */
+async function emitView(): Promise<void> {
+  const k = stepKey();
+  const fp = schemaFp.value;
+  if (!fp || !k || k === "init") return;
+  if (stepViewSentKeys.has(k)) return;
+  stepViewSentKeys.add(k);
+  writeStoredStepViews(sessionId, fp, stepViewSentKeys);
+  await trackEvent(sessionId, "step_view", k, undefined, quizSchemaRowId.value);
 }
+
+const stepAnswerDedupeKeys = new Set<string>();
+
+function stepAnswerDedupeKey(nodeId: string, value: string | number | string[]): string {
+  const idx = navStack.value.lastIndexOf(nodeId);
+  const v = Array.isArray(value)
+    ? [...value].sort((a, b) => String(a).localeCompare(String(b), "ru"))
+    : value;
+  if (idx < 0) return JSON.stringify({ c: nodeId, v, o: "orphan" });
+  return JSON.stringify({ c: nodeId, a: ancestorAnswersBeforeNode(nodeId), v });
+}
+
+function trackStepAnswer(node: QuizNode, value: string | number | string[]): void {
+  const bt = node.type;
+  if (bt === "form" || bt === "ai_summary") return;
+  const dk = stepAnswerDedupeKey(node.id, value);
+  if (stepAnswerDedupeKeys.has(dk)) return;
+  stepAnswerDedupeKeys.add(dk);
+  const payload: Record<string, unknown> = { block_type: bt };
+  if (Array.isArray(value)) payload.values = value;
+  else payload.value = typeof value === "number" ? String(value) : value;
+  void trackEvent(sessionId, "step_answer", node.id, payload, quizSchemaRowId.value);
+}
+
+/** Дропы считаются на сервере: сессия без заявки и без активности N минут (см. analytics_sessions). */
 
 watch(currentNodeId, () => {
   void emitView();
@@ -162,6 +325,7 @@ async function loadSchema(): Promise<void> {
   flowError.value = "";
   try {
     const row = await api<QuizSchemaApiRow>("/quiz-schema");
+    quizSchemaRowId.value = row.id > 0 ? row.id : null;
     const s = asSchema(row.schema);
     if (!s?.nodes?.length) {
       schemaError.value = "Схема квиза пуста";
@@ -173,12 +337,16 @@ async function loadSchema(): Promise<void> {
     const fp = fingerprint(s);
     schemaFp.value = fp;
     if (persistedSnap?.fingerprint === fp) {
+      stepViewSentKeys = readStoredStepViews(sessionId, fp);
       navStack.value = [...persistedSnap.navStack];
       stepsCompleted.value = [...persistedSnap.steps];
       answersByNode.value = { ...persistedSnap.answersByNode };
       form.value = { ...persistedSnap.form };
       aiSummary.value = persistedSnap.aiSummary;
     } else {
+      stepViewSentKeys = new Set();
+      writeStoredStepViews(sessionId, fp, stepViewSentKeys);
+      stepAnswerDedupeKeys.clear();
       const start = findStartNodeId(s);
       if (!start) {
         schemaError.value = "Не удалось определить начало квиза";
@@ -194,6 +362,7 @@ async function loadSchema(): Promise<void> {
     schemaError.value = e instanceof Error ? e.message : "Не удалось загрузить квиз";
     schemaRaw.value = null;
     schemaFp.value = "";
+    quizSchemaRowId.value = null;
   } finally {
     schemaLoading.value = false;
   }
@@ -294,8 +463,9 @@ function advanceTo(nextId: string | null): void {
     flowError.value = "Для этого шага не задан следующий. Проверьте схему в админке.";
     return;
   }
-  if (nextId === "done") {
-    flowError.value = "Некорректная схема: шаг «done» не используется как экран. Обратитесь к администратору.";
+  // Маркер конца (см. default_quiz_schema: у form в nextStep), не узел на графе.
+  if (nextId === "done" || nextId === "end" || nextId === "finish") {
+    flowError.value = "";
     return;
   }
   const s = schemaRaw.value;
@@ -311,6 +481,7 @@ function onSelectSingle(node: QuizNode, opt: QuizOption): void {
   if (!s) return;
   answersByNode.value = { ...answersByNode.value, [node.id]: opt.label };
   pushStep(node, opt.label);
+  trackStepAnswer(node, opt.label);
   const next = resolveNext(s, node, opt);
   advanceTo(next);
 }
@@ -351,7 +522,9 @@ function commitMulti(node: QuizNode): void {
   const s = schemaRaw.value;
   if (!s || !multiDraft.value.length) return;
   answersByNode.value = { ...answersByNode.value, [node.id]: [...multiDraft.value] };
-  pushStep(node, [...multiDraft.value]);
+  const chosen = [...multiDraft.value];
+  pushStep(node, chosen);
+  trackStepAnswer(node, chosen);
   const next = resolveNext(s, node);
   advanceTo(next);
 }
@@ -374,7 +547,9 @@ function commitSlider(node: QuizNode): void {
   if (!s) return;
   const v = sliderDraft.value;
   answersByNode.value = { ...answersByNode.value, [node.id]: v };
-  pushStep(node, `${v} м²`);
+  const label = `${v} м²`;
+  pushStep(node, label);
+  trackStepAnswer(node, label);
   const next = resolveNext(s, node);
   advanceTo(next);
 }
@@ -452,7 +627,12 @@ async function submitLead(): Promise<void> {
       if (sid === "step4" || tit.includes("стил")) answers.style = s.value;
       if (sid === "step5" || tit.includes("бюджет")) answers.budget = s.value;
     }
-    const payload = {
+    const href = window.location.href.split("#")[0];
+    const utm =
+      typeof window !== "undefined"
+        ? new URLSearchParams(window.location.search).get("utm_source")
+        : null;
+    const payload: Record<string, unknown> = {
       name: form.value.name.trim(),
       phone: formatPhoneApi(),
       email: form.value.email.trim() || null,
@@ -460,8 +640,18 @@ async function submitLead(): Promise<void> {
       consent: form.value.consent,
       session_id: sessionId,
       answers,
+      page_url: href || null,
+      utm_source: utm && utm.trim() ? utm.trim().slice(0, 256) : null,
     };
-    const res = await api<{ id: string; request_number: string }>("/leads", {
+    if (quizSchemaRowId.value != null && quizSchemaRowId.value > 0) {
+      payload.quiz_schema_id = quizSchemaRowId.value;
+    }
+    const res = await api<{
+      id: string;
+      request_number: string;
+      page_url?: string | null;
+      utm_source?: string | null;
+    }>("/leads", {
       method: "POST",
       json: payload,
     });
@@ -472,6 +662,13 @@ async function submitLead(): Promise<void> {
       margin: 2,
       color: { dark: "#1a1b20", light: "#ffffff" },
     });
+    saveLastSubmittedLead(res.id, res.request_number);
+    lastSubmittedLead.value = loadLastSubmittedLead();
+    /** Заявка уже привязана к старому session_id в теле POST; дальше — новая «сессия» воронки. */
+    sessionId = rotateSessionId();
+    stepViewSentKeys = new Set();
+    stepAnswerDedupeKeys.clear();
+    if (schemaFp.value) writeStoredStepViews(sessionId, schemaFp.value, stepViewSentKeys);
     successDone.value = true;
     clearPersisted();
   } catch (e) {
@@ -519,55 +716,75 @@ function onImgError(nodeId: string, optId: string): void {
 }
 
 onMounted(() => {
+  lastSubmittedLead.value = loadLastSubmittedLead();
   void emitView();
-  window.addEventListener("beforeunload", onBeforeUnload);
   void loadSchema();
 });
 
-onUnmounted(() => {
-  window.removeEventListener("beforeunload", onBeforeUnload);
-});
 </script>
 
 <template>
-  <div class="min-h-screen bg-gradient-to-b from-ink-50 via-white to-ink-100">
-    <header class="border-b border-ink-200/60 bg-white/80 backdrop-blur-md">
-      <div class="mx-auto flex max-w-3xl items-center justify-between px-4 py-4">
-        <div>
-          <p class="font-display text-lg font-semibold tracking-tight text-ink-950">Студия интерьера</p>
-          <p class="text-sm text-ink-800/70">Подбор проекта за пару минут</p>
+  <div class="page-shell">
+    <header class="app-header">
+      <div class="mx-auto flex max-w-3xl flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
+        <div class="min-w-0">
+          <p class="font-display text-lg font-bold tracking-tight text-ink-950 dark:text-ink-50 sm:text-xl">
+            Студия интерьера
+          </p>
+          <p class="mt-0.5 text-sm text-ink-600 dark:text-ink-400">Подбор проекта за пару минут</p>
         </div>
-        <div class="text-right text-sm text-ink-800/80">
-          <span class="font-medium text-accent-dim">Консультация</span>
-          <span class="block text-xs">без обязательств</span>
+        <div class="flex flex-wrap items-center gap-2 sm:justify-end sm:gap-3">
+          <RouterLink
+            v-if="lastSubmittedLead"
+            :to="`/lead/${lastSubmittedLead.id}`"
+            class="inline-flex min-h-10 items-center rounded-xl border border-accent/45 bg-amber-50/95 px-3 py-2 text-sm font-bold text-ink-950 shadow-sm ring-1 ring-accent/15 transition hover:border-accent hover:bg-amber-100/95 hover:shadow-md dark:border-accent/35 dark:bg-ink-800 dark:text-ink-50 dark:ring-accent/10 dark:hover:bg-ink-700"
+          >
+            Ваша заявка
+            <span class="ml-1.5 font-mono text-xs font-bold text-accent-dim dark:text-accent-dim"
+              >№{{ lastSubmittedLead.requestNumber }}</span
+            >
+          </RouterLink>
+          <div class="text-left text-sm text-ink-700 dark:text-ink-300 sm:text-right">
+            <span class="font-bold text-accent-dim">Консультация</span>
+            <span class="block text-xs text-ink-600 dark:text-ink-500">без обязательств</span>
+          </div>
         </div>
       </div>
     </header>
 
-    <main class="mx-auto max-w-3xl px-4 py-8">
-      <div v-if="schemaLoading" class="rounded-2xl border border-ink-200 bg-white p-10 text-center text-ink-700 shadow-card">
+    <main class="content-narrow">
+      <div
+        v-if="schemaLoading"
+        class="surface-panel p-10 text-center text-base font-medium text-ink-700 dark:text-ink-300"
+      >
         Загружаем квиз…
       </div>
 
-      <div v-else-if="schemaError" class="rounded-2xl border border-red-200 bg-red-50/80 p-6 text-red-800 shadow-card">
+      <div
+        v-else-if="schemaError"
+        class="rounded-2xl border border-red-200 bg-red-50/90 p-6 text-red-800 shadow-card backdrop-blur-sm dark:border-red-900/50 dark:bg-red-950/35 dark:text-red-200 sm:rounded-3xl sm:p-8"
+      >
         {{ schemaError }}
       </div>
 
       <template v-else-if="!successDone && currentNode">
-        <div class="mb-8">
-          <div class="mb-2 flex justify-between text-sm text-ink-800/80">
+        <div class="mb-8 sm:mb-10">
+          <div class="mb-2 flex justify-between text-sm font-semibold text-ink-800 dark:text-ink-300">
             <span>Прогресс</span>
-            <span>Шаг {{ progressStepDisplay }} из {{ progressDenominator }}</span>
+            <span class="tabular-nums">Шаг {{ progressStepDisplay }} из {{ progressDenominator }}</span>
           </div>
-          <div class="h-2 overflow-hidden rounded-full bg-ink-200">
+          <div class="h-2.5 overflow-hidden rounded-full bg-ink-200/90 shadow-inner dark:bg-ink-800 sm:h-3">
             <div
-              class="h-full rounded-full bg-gradient-to-r from-accent-dim to-accent transition-all duration-500 ease-out"
+              class="h-full rounded-full bg-gradient-to-r from-accent-dim via-accent to-amber-300 shadow-sm transition-all duration-500 ease-out dark:to-accent"
               :style="{ width: progressPercent + '%' }"
             />
           </div>
         </div>
 
-        <p v-if="flowError" class="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950">
+        <p
+          v-if="flowError"
+          class="mb-4 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-950 dark:border-amber-700/50 dark:bg-amber-950/25 dark:text-amber-100"
+        >
           {{ flowError }}
         </p>
 
@@ -576,10 +793,10 @@ onUnmounted(() => {
             <div :key="currentNode.id" class="quiz-stage">
               <!-- single -->
               <section v-if="currentNode.type === 'single'" class="space-y-6">
-                <h1 class="font-display text-2xl font-semibold text-ink-950 md:text-3xl">
+                <h1 class="font-display text-2xl font-semibold text-ink-950 dark:text-ink-50 md:text-3xl">
                   {{ currentNode.title || "Выберите вариант" }}
                 </h1>
-                <p class="text-ink-800/80">Выберите один вариант</p>
+                <p class="text-ink-800/80 dark:text-ink-300">Выберите один вариант</p>
                 <div class="grid gap-3 sm:grid-cols-2">
                   <button
                     v-for="opt in currentNode.options || []"
@@ -588,8 +805,8 @@ onUnmounted(() => {
                     class="overflow-hidden rounded-2xl border-2 text-left shadow-card transition hover:shadow-lift"
                     :class="
                       answersByNode[currentNode.id] === opt.label
-                        ? 'border-accent bg-amber-50/80'
-                        : 'border-transparent bg-white hover:border-ink-200'
+                        ? 'border-accent bg-amber-50/80 dark:border-accent dark:bg-ink-800/80'
+                        : 'border-transparent bg-white hover:border-ink-200 dark:bg-ink-900 dark:hover:border-ink-600'
                     "
                     @click="onSelectSingle(currentNode, opt)"
                   >
@@ -609,7 +826,7 @@ onUnmounted(() => {
                       </div>
                     </div>
                     <div v-else class="p-4">
-                      <span class="font-medium text-ink-900">{{ opt.label }}</span>
+                      <span class="font-medium text-ink-900 dark:text-ink-100">{{ opt.label }}</span>
                     </div>
                   </button>
                 </div>
@@ -617,34 +834,61 @@ onUnmounted(() => {
 
               <!-- multi -->
               <section v-else-if="currentNode.type === 'multi'" class="space-y-6">
-                <h1 class="font-display text-2xl font-semibold text-ink-950 md:text-3xl">
+                <h1 class="font-display text-2xl font-semibold text-ink-950 dark:text-ink-50 md:text-3xl">
                   {{ currentNode.title || "Выбор" }}
                 </h1>
-                <p class="text-ink-800/80">Можно выбрать несколько</p>
+                <p class="text-ink-800/80 dark:text-ink-300">Можно выбрать несколько</p>
                 <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
                   <label
                     v-for="opt in currentNode.options || []"
                     :key="opt.id"
-                    class="flex cursor-pointer items-center gap-2 rounded-xl border bg-white p-3 shadow-card transition hover:border-accent/40"
-                    :class="multiChecked(opt.label) ? 'border-accent ring-1 ring-accent/30' : 'border-ink-100'"
+                    role="checkbox"
+                    :aria-checked="multiChecked(opt.label)"
+                    tabindex="0"
+                    class="flex cursor-pointer items-center gap-2 rounded-xl border bg-white p-3 shadow-card outline-none transition hover:border-accent/40 focus-visible:ring-2 focus-visible:ring-accent/50 dark:bg-ink-900"
+                    :class="
+                      multiChecked(opt.label) ? 'border-accent ring-1 ring-accent/30 dark:border-accent' : 'border-ink-100 dark:border-ink-700'
+                    "
+                    @click.prevent="toggleMulti(opt)"
+                    @keydown.space.prevent="toggleMulti(opt)"
+                    @keydown.enter.prevent="toggleMulti(opt)"
                   >
-                    <input
-                      type="checkbox"
-                      class="size-4 accent-accent"
-                      :checked="multiChecked(opt.label)"
-                      @click.prevent="toggleMulti(opt)"
-                    />
-                    <span class="text-sm font-medium text-ink-900">{{ opt.label }}</span>
+                    <span
+                      class="flex size-4 shrink-0 items-center justify-center rounded border-2 transition"
+                      :class="
+                        multiChecked(opt.label)
+                          ? 'border-accent-dim bg-accent-dim'
+                          : 'border-ink-300 bg-white dark:border-ink-600 dark:bg-ink-900'
+                      "
+                      aria-hidden="true"
+                    >
+                      <svg
+                        v-show="multiChecked(opt.label)"
+                        class="size-2.5 text-white"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          d="M2.5 6L5 8.5 9.5 3"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
+                    </span>
+                    <span class="text-sm font-medium text-ink-900 dark:text-ink-100">{{ opt.label }}</span>
                   </label>
                 </div>
               </section>
 
               <!-- slider -->
               <section v-else-if="currentNode.type === 'slider'" class="space-y-6">
-                <h1 class="font-display text-2xl font-semibold text-ink-950 md:text-3xl">
+                <h1 class="font-display text-2xl font-semibold text-ink-950 dark:text-ink-50 md:text-3xl">
                   {{ currentNode.title || "Значение" }}
                 </h1>
-                <div class="rounded-2xl bg-white p-6 shadow-card">
+                <div class="rounded-2xl bg-white p-6 shadow-card dark:bg-ink-900 dark:ring-1 dark:ring-ink-700">
                   <p class="mb-4 text-center font-display text-3xl font-semibold text-accent-dim">{{ sliderDraft }} м²</p>
                   <input
                     v-model.number="sliderDraft"
@@ -654,7 +898,7 @@ onUnmounted(() => {
                     :step="currentNode.step ?? 1"
                     class="w-full accent-accent"
                   />
-                  <div class="mt-2 flex justify-between text-xs text-ink-800/60">
+                  <div class="mt-2 flex justify-between text-xs text-ink-800/60 dark:text-ink-400">
                     <span>{{ currentNode.min ?? 0 }}</span>
                     <span>{{ currentNode.max ?? 100 }}</span>
                   </div>
@@ -663,67 +907,90 @@ onUnmounted(() => {
 
               <!-- ai_summary -->
               <section v-else-if="currentNode.type === 'ai_summary'" class="space-y-6">
-                <h1 class="font-display text-2xl font-semibold text-ink-950 md:text-3xl">
+                <h1 class="font-display text-2xl font-semibold text-ink-950 dark:text-ink-50 md:text-3xl">
                   {{ currentNode.title || "Резюме" }}
                 </h1>
-                <p class="text-ink-800/80">На основе ваших ответов</p>
-                <div class="rounded-2xl border border-ink-200 bg-white p-6 shadow-lift">
-                  <p v-if="summaryLoading" class="text-ink-800/70">Готовим текст…</p>
-                  <p v-else class="leading-relaxed text-ink-900">{{ aiSummary }}</p>
+                <p class="text-ink-800/80 dark:text-ink-300">На основе ваших ответов</p>
+                <div class="rounded-2xl border border-ink-200 bg-white p-6 shadow-lift dark:border-ink-700 dark:bg-ink-900">
+                  <p v-if="summaryLoading" class="text-ink-800/70 dark:text-ink-400">Готовим текст…</p>
+                  <p v-else class="leading-relaxed text-ink-900 dark:text-ink-100">{{ aiSummary }}</p>
                 </div>
               </section>
 
               <!-- form -->
               <section v-else-if="currentNode.type === 'form'" class="space-y-6">
-                <h1 class="font-display text-2xl font-semibold text-ink-950 md:text-3xl">
+                <h1 class="font-display text-2xl font-semibold text-ink-950 dark:text-ink-50 md:text-3xl">
                   {{ currentNode.title || "Контакты" }}
                 </h1>
-                <div class="space-y-4 rounded-2xl bg-white p-6 shadow-card">
-                  <label class="block text-sm font-medium text-ink-800">
+                <div class="space-y-4 rounded-2xl bg-white p-6 shadow-card dark:bg-ink-900 dark:ring-1 dark:ring-ink-700">
+                  <label class="block text-sm font-medium text-ink-800 dark:text-ink-200">
                     Имя
                     <input
                       v-model="form.name"
                       type="text"
-                      class="mt-1 w-full rounded-xl border border-ink-200 px-3 py-2 outline-none focus:border-accent"
+                      class="mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 outline-none focus:border-accent dark:border-ink-600 dark:bg-ink-950 dark:text-ink-50"
                       autocomplete="name"
                     />
                   </label>
-                  <label class="block text-sm font-medium text-ink-800">
-                    Телефон <span class="text-red-600">*</span>
+                  <label class="block text-sm font-medium text-ink-800 dark:text-ink-200">
+                    Телефон <span class="text-red-600 dark:text-red-400">*</span>
                     <input
                       :value="phoneDisplay"
                       type="text"
                       inputmode="tel"
                       placeholder="+7 (___) ___-__-__"
-                      class="mt-1 w-full rounded-xl border border-ink-200 px-3 py-2 font-mono outline-none focus:border-accent"
+                      class="mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 font-mono outline-none focus:border-accent dark:border-ink-600 dark:bg-ink-950 dark:text-ink-50"
                       @input="onPhoneInput"
                     />
                   </label>
-                  <label class="block text-sm font-medium text-ink-800">
+                  <label class="block text-sm font-medium text-ink-800 dark:text-ink-200">
                     Email
                     <input
                       v-model="form.email"
                       type="email"
-                      class="mt-1 w-full rounded-xl border border-ink-200 px-3 py-2 outline-none focus:border-accent"
+                      class="mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 outline-none focus:border-accent dark:border-ink-600 dark:bg-ink-950 dark:text-ink-50"
                       autocomplete="email"
                     />
                   </label>
-                  <label class="block text-sm font-medium text-ink-800">
+                  <label class="block text-sm font-medium text-ink-800 dark:text-ink-200">
                     Комментарий
                     <textarea
                       v-model="form.comment"
                       rows="3"
-                      class="mt-1 w-full rounded-xl border border-ink-200 px-3 py-2 outline-none focus:border-accent"
+                      class="mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 outline-none focus:border-accent dark:border-ink-600 dark:bg-ink-950 dark:text-ink-50"
                     />
                   </label>
-                  <label class="flex items-start gap-2 text-sm text-ink-800">
-                    <input v-model="form.consent" type="checkbox" class="mt-1 accent-accent" />
+                  <label class="flex cursor-pointer items-start gap-2 text-sm text-ink-800 dark:text-ink-200">
+                    <input v-model="form.consent" type="checkbox" class="peer sr-only" />
+                    <span
+                      class="mt-1 flex size-4 shrink-0 items-center justify-center rounded border-2 transition peer-focus-visible:ring-2 peer-focus-visible:ring-accent/50"
+                      :class="
+                        form.consent ? 'border-accent-dim bg-accent-dim' : 'border-ink-300 bg-white dark:border-ink-600 dark:bg-ink-900'
+                      "
+                      aria-hidden="true"
+                    >
+                      <svg
+                        v-show="form.consent"
+                        class="size-2.5 text-white"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        xmlns="http://www.w3.org/2000/svg"
+                      >
+                        <path
+                          d="M2.5 6L5 8.5 9.5 3"
+                          stroke="currentColor"
+                          stroke-width="2"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                        />
+                      </svg>
+                    </span>
                     <span>Согласен на обработку персональных данных</span>
                   </label>
-                  <p v-if="submitError" class="text-sm text-red-600">{{ submitError }}</p>
+                  <p v-if="submitError" class="text-sm text-red-600 dark:text-red-400">{{ submitError }}</p>
                   <button
                     type="button"
-                    class="w-full rounded-xl bg-ink-950 py-3 font-semibold text-white transition hover:bg-ink-900 disabled:opacity-50"
+                    class="w-full rounded-xl bg-ink-950 py-3 font-semibold text-white transition hover:bg-ink-900 disabled:opacity-50 dark:bg-accent dark:text-ink-950 dark:hover:bg-accent-dim"
                     :disabled="submitLoading"
                     @click="submitLead"
                   >
@@ -732,8 +999,8 @@ onUnmounted(() => {
                 </div>
               </section>
 
-              <section v-else class="space-y-4 rounded-2xl border border-ink-200 bg-white p-6 shadow-card">
-                <p class="text-ink-800">
+              <section v-else class="space-y-4 rounded-2xl border border-ink-200 bg-white p-6 shadow-card dark:border-ink-700 dark:bg-ink-900">
+                <p class="text-ink-800 dark:text-ink-200">
                   Тип блока «<strong>{{ currentNode.type }}</strong>» пока не поддерживается на публичной странице.
                 </p>
               </section>
@@ -744,7 +1011,7 @@ onUnmounted(() => {
         <div v-if="showFooterNext()" class="mt-10 flex items-center justify-between gap-4">
           <button
             type="button"
-            class="rounded-xl border border-ink-200 bg-white px-5 py-2.5 text-sm font-medium text-ink-900 transition hover:bg-ink-50 disabled:opacity-40"
+            class="rounded-xl border border-ink-200 bg-white px-5 py-2.5 text-sm font-medium text-ink-900 transition hover:bg-ink-50 disabled:opacity-40 dark:border-ink-600 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800"
             :disabled="navStack.length <= 1"
             @click="goBack"
           >
@@ -752,7 +1019,7 @@ onUnmounted(() => {
           </button>
           <button
             type="button"
-            class="rounded-xl bg-ink-950 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-ink-900 disabled:opacity-40"
+            class="rounded-xl bg-ink-950 px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-ink-900 disabled:opacity-40 dark:bg-accent dark:text-ink-950 dark:hover:bg-accent-dim"
             :disabled="!canProceed"
             @click="onNextClick"
           >
@@ -763,7 +1030,7 @@ onUnmounted(() => {
         <div v-else-if="currentNode.type === 'single'" class="mt-10 flex justify-start">
           <button
             type="button"
-            class="rounded-xl border border-ink-200 bg-white px-5 py-2.5 text-sm font-medium text-ink-900 hover:bg-ink-50 disabled:opacity-40"
+            class="rounded-xl border border-ink-200 bg-white px-5 py-2.5 text-sm font-medium text-ink-900 hover:bg-ink-50 disabled:opacity-40 dark:border-ink-600 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800"
             :disabled="navStack.length <= 1"
             @click="goBack"
           >
@@ -774,7 +1041,7 @@ onUnmounted(() => {
         <div v-else-if="currentNode.type === 'form'" class="mt-6 flex justify-start">
           <button
             type="button"
-            class="rounded-xl border border-ink-200 bg-white px-5 py-2.5 text-sm font-medium text-ink-900 hover:bg-ink-50"
+            class="rounded-xl border border-ink-200 bg-white px-5 py-2.5 text-sm font-medium text-ink-900 hover:bg-ink-50 dark:border-ink-600 dark:bg-ink-900 dark:text-ink-100 dark:hover:bg-ink-800"
             :disabled="navStack.length <= 1"
             @click="goBack"
           >
@@ -784,15 +1051,24 @@ onUnmounted(() => {
       </template>
 
       <section v-else-if="successDone" class="space-y-8 text-center">
-        <div class="mx-auto max-w-md rounded-3xl border border-ink-200 bg-white p-8 shadow-lift">
+        <div class="mx-auto max-w-md rounded-3xl border border-ink-200 bg-white p-8 shadow-lift dark:border-ink-700 dark:bg-ink-900">
           <p class="text-sm font-medium uppercase tracking-wider text-accent-dim">Заявка принята</p>
-          <h1 class="mt-2 font-display text-3xl font-semibold text-ink-950">Спасибо!</h1>
-          <p class="mt-2 text-ink-800/80">Номер заявки</p>
-          <p class="mt-1 font-mono text-2xl font-bold text-ink-950">{{ requestNumber }}</p>
+          <h1 class="mt-2 font-display text-3xl font-semibold text-ink-950 dark:text-ink-50">Спасибо!</h1>
+          <p class="mt-2 text-ink-800/80 dark:text-ink-300">Номер заявки</p>
+          <p class="mt-1 font-mono text-2xl font-bold text-ink-950 dark:text-ink-50">{{ requestNumber }}</p>
           <div class="mt-6 flex justify-center">
-            <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR" class="rounded-xl border border-ink-100" />
+            <img v-if="qrDataUrl" :src="qrDataUrl" alt="QR" class="rounded-xl border border-ink-100 dark:border-ink-600" />
           </div>
-          <p class="mt-4 text-sm text-ink-800/70">Отсканируйте QR, чтобы отслеживать статус заявки</p>
+          <p class="mt-4 text-sm text-ink-800/70 dark:text-ink-400">
+            Отсканируйте QR или откройте статус по ссылке — мы сохранили её в этом браузере.
+          </p>
+          <RouterLink
+            v-if="lastSubmittedLead"
+            :to="`/lead/${lastSubmittedLead.id}`"
+            class="mt-4 inline-flex rounded-xl bg-ink-950 px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-ink-900 dark:bg-accent dark:text-ink-950 dark:hover:bg-accent-dim"
+          >
+            Открыть статус заявки
+          </RouterLink>
         </div>
       </section>
     </main>

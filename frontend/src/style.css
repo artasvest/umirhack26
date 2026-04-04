@@ -9,7 +9,43 @@ html {
 }
 
 body {
-  @apply min-h-screen bg-ink-50 text-ink-900 antialiased;
+  @apply min-h-screen bg-ink-50 text-ink-900 antialiased dark:bg-ink-950 dark:text-ink-50;
+}
+
+::selection {
+  @apply bg-accent/35 text-ink-950 dark:bg-accent/25 dark:text-ink-50;
+}
+
+@layer components {
+  /* overflow-x-clip вместо hidden — на мобильных реже «съедает» жесты у вложенных canvas (Vue Flow). */
+  .page-shell {
+    @apply relative min-h-screen overflow-x-clip bg-gradient-to-b from-ink-50 via-white to-ink-100 dark:from-ink-950 dark:via-ink-950 dark:to-ink-900;
+  }
+
+  .page-shell::before {
+    content: "";
+    @apply pointer-events-none fixed inset-0 -z-10 bg-mesh-light dark:bg-mesh-dark;
+  }
+
+  .app-header {
+    @apply sticky top-0 z-40 border-b border-ink-200/80 bg-white/80 shadow-sm backdrop-blur-xl backdrop-saturate-150 dark:border-ink-800/80 dark:bg-ink-900/85;
+  }
+
+  .content-container {
+    @apply relative z-10 mx-auto w-full max-w-6xl px-4 pb-28 pt-6 sm:px-6 sm:pb-32 sm:pt-8 lg:px-8 lg:pt-10;
+  }
+
+  .content-narrow {
+    @apply relative z-10 mx-auto w-full max-w-3xl px-4 pb-28 pt-6 sm:px-6 sm:pb-32 sm:pt-8;
+  }
+
+  .surface-panel {
+    @apply rounded-2xl border border-ink-200/90 bg-white/95 p-5 shadow-card backdrop-blur-sm sm:rounded-3xl sm:p-6 dark:border-ink-700/90 dark:bg-ink-900/95;
+  }
+
+  .surface-panel-accent {
+    @apply rounded-2xl border border-accent/30 bg-gradient-to-br from-amber-50/95 to-white p-5 shadow-card backdrop-blur-sm sm:rounded-3xl sm:p-6 dark:border-accent/25 dark:from-ink-900 dark:to-ink-900/90;
+  }
 }
 
 .quiz-perspective {
