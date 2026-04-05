@@ -1,6 +1,7 @@
 import asyncio
 import sys
 from logging.config import fileConfig
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -24,15 +25,25 @@ target_metadata = Base.metadata
 
 
 def _alembic_database_url() -> str:
-    """Берём URL из backend/.env (Settings). Для asyncpg без SSL на сервере — добавляем ssl=false (иначе WinError 10054)."""
+    """Берём URL из backend/.env. Для asyncpg без TLS на сервере добавляем sslmode=disable (не ssl=false — иначе ClientConfigurationError)."""
     url = (settings.DATABASE_URL or "").strip()
     if not url:
         raise RuntimeError(
             "DATABASE_URL пустой: задайте в backend/.env (как при локальном uvicorn). "
-            "Для Alembic с удалённым Postgres без TLS добавьте в URL параметр ssl=false."
+            "Для Postgres без SSL можно явно: ?sslmode=disable"
         )
-    if "postgresql+asyncpg" in url.lower() and "ssl=" not in url.lower():
-        url = f"{url}&ssl=false" if "?" in url else f"{url}?ssl=false"
+    lower = url.lower()
+    if "postgresql+asyncpg" not in lower:
+        return url
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query, keep_blank_values=True)
+    # asyncpg не принимает ssl=false — только sslmode=disable|allow|...
+    for bad in ("ssl",):
+        qs.pop(bad, None)
+    if "sslmode" not in qs:
+        qs["sslmode"] = ["disable"]
+    new_query = urlencode(qs, doseq=True)
+    url = urlunparse(parsed._replace(query=new_query))
     return url
 
 
