@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import logging
 import mimetypes
 from typing import Any
@@ -22,6 +23,42 @@ def _guess_mime(filename: str) -> str | None:
         return None
     mt, _ = mimetypes.guess_type(filename)
     return mt
+
+
+def _mime_for_audio_upload(filename: str) -> str:
+    """
+    Браузерный MediaRecorder даёт .webm с аудио; mimetypes отдаёт video/webm — для API лучше audio/webm.
+    """
+    name = (filename or "").lower()
+    if name.endswith(".webm"):
+        return "audio/webm"
+    if name.endswith(".m4a") or name.endswith(".mp4"):
+        return "audio/mp4"
+    if name.endswith(".mp3"):
+        return "audio/mpeg"
+    if name.endswith(".wav"):
+        return "audio/wav"
+    if name.endswith(".ogg"):
+        return "audio/ogg"
+    return _guess_mime(filename) or "application/octet-stream"
+
+
+def _groq_error_summary(response_text: str) -> str:
+    try:
+        data = json.loads(response_text)
+    except (json.JSONDecodeError, TypeError):
+        return response_text[:300]
+    if not isinstance(data, dict):
+        return response_text[:300]
+    err = data.get("error")
+    if isinstance(err, dict):
+        msg = err.get("message")
+        typ = err.get("type") or err.get("code")
+        if isinstance(msg, str) and msg.strip():
+            if typ:
+                return f"{typ}: {msg}"
+            return msg
+    return response_text[:300]
 
 
 def _parse_openai_style_transcription(data: Any) -> str | None:
@@ -56,7 +93,7 @@ async def transcribe_with_groq(content: bytes, filename: str) -> str | None:
     if not key:
         return None
     name = filename or "audio.webm"
-    mime = _guess_mime(name) or "application/octet-stream"
+    mime = _mime_for_audio_upload(name)
     model = (settings.GROQ_TRANSCRIPTION_MODEL or "whisper-large-v3-turbo").strip()
     timeout = settings.GROQ_TRANSCRIPTION_TIMEOUT_SEC
     try:
@@ -78,7 +115,13 @@ async def transcribe_with_groq(content: bytes, filename: str) -> str | None:
             text = r.text.strip()
             return text if text else None
     except httpx.HTTPStatusError as e:
-        logger.warning("Groq transcription HTTP %s: %s", e.response.status_code, e.response.text[:500])
+        body = e.response.text or ""
+        summary = _groq_error_summary(body)
+        logger.warning(
+            "Groq transcription HTTP %s: %s",
+            e.response.status_code,
+            summary[:500],
+        )
     except Exception as e:
         logger.warning("Groq transcription failed: %s", e)
     return None

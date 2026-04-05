@@ -618,7 +618,11 @@ async def add_voice_note(
                 f"Файл: {fn}"
             )
         else:
-            body = f"[Голосовая заметка] Не удалось распознать речь. Файл: {fn}"
+            body = (
+                f"[Голосовая заметка] Не удалось распознать речь. "
+                f"Если в логах бэкенда Groq отвечает 403 Forbidden — проверьте GROQ_API_KEY в backend/.env, "
+                f"регион/IP и права на модель в консоли Groq. Файл: {fn}"
+            )
 
     note = Note(lead_id=lead.id, author_id=user.id, body=body, is_voice=True)
     db.add(note)
