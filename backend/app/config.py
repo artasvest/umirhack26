@@ -2,15 +2,21 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Всегда backend/.env (рядом с каталогом app), независимо от cwd при запуске uvicorn.
+# backend/.env и при необходимости .env в корне репозитория (последний перекрывает при одинаковых ключах).
 _BACKEND_DIR = Path(__file__).resolve().parent.parent
 _ENV_PATH = _BACKEND_DIR / ".env"
+_REPO_ROOT = _BACKEND_DIR.parent
+_ROOT_ENV_PATH = _REPO_ROOT / ".env"
+_ENV_FILE_CHAIN: list[str] = []
+if _ROOT_ENV_PATH.is_file():
+    _ENV_FILE_CHAIN.append(str(_ROOT_ENV_PATH))
+if _ENV_PATH.is_file():
+    _ENV_FILE_CHAIN.append(str(_ENV_PATH))
 
 
 class Settings(BaseSettings):
-    # Только .env — иначе значения из закоммиченного .env.example (например Postgres) ломают локальный запуск.
     model_config = SettingsConfigDict(
-        env_file=str(_ENV_PATH) if _ENV_PATH.is_file() else None,
+        env_file=_ENV_FILE_CHAIN if _ENV_FILE_CHAIN else None,
         env_file_encoding="utf-8",
         extra="ignore",
     )
