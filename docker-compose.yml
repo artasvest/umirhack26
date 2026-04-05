@@ -42,7 +42,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env.example
+      - .env
     environment:
       DATABASE_URL: ${DATABASE_URL}
     depends_on:

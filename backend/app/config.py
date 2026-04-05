@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     )
 
     # Только PostgreSQL + asyncpg (см. app/database.py). Реальные учётные данные — в .env.
-    DATABASE_URL: str = "postgresql+asyncpg://umir_user:0607078219@178.72.154.142:5432/umir_db"
+    DATABASE_URL: str = "postgresql+asyncpg://umir_user:0607078219@db:5432/umir_db"
     JWT_SECRET: str = "dev-secret-change-in-production"
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24 * 7

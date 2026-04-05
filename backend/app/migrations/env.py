@@ -1,3 +1,9 @@
+import sys
+if sys.platform == "win32":
+    import asyncio
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
+# ... остальной код без изменений
 import asyncio
 from logging.config import fileConfig
 
