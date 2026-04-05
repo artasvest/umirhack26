@@ -93,6 +93,10 @@ services:
     restart: unless-stopped
     ports:
       - "80:80"
+      - "443:443"
+    volumes:
+    - /etc/letsencrypt/live/itdon-smartquiz-hack.ru/fullchain.pem:/etc/nginx/ssl/fullchain.pem:ro
+    - /etc/letsencrypt/live/itdon-smartquiz-hack.ru/privkey.pem:/etc/nginx/ssl/privkey.pem:ro
     depends_on:
       - backend
     networks:
