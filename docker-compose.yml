@@ -42,7 +42,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - .env.example
     environment:
       DATABASE_URL: ${DATABASE_URL}
     depends_on:
@@ -54,16 +54,17 @@ services:
     networks:
      - prod
 
+  # SPA и прокси /api → backend. Открывайте http://<сервер>:80 (не :8000 — там только API без HTML).
   nginx:
     build:
       context: .
       dockerfile: docker/nginx/Dockerfile
+    image: umirhack26-nginx
     restart: unless-stopped
     ports:
-      - 80:80
+      - "80:80"
     depends_on:
       - backend
-      - db
     networks:
       - prod
 
