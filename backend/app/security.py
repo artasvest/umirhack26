@@ -9,6 +9,7 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth_messages import MANAGER_BLOCKED_MSG
 from app.config import settings
 from app.database import get_db
 from app.models import User, UserRole
@@ -40,25 +41,27 @@ async def get_current_user(
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> User:
     if creds is None or creds.scheme.lower() != "bearer":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Войдите в систему снова")
     try:
         payload = decode_token(creds.credentials)
         sub = payload.get("sub")
         if sub is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия недействительна")
         user_id = UUID(sub)
     except (JWTError, ValueError):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия недействительна")
     user = await db.get(User, user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден")
+    if user.role == UserRole.manager and not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=MANAGER_BLOCKED_MSG)
     return user
 
 
 def require_roles(*roles: UserRole):
     async def _dep(user: Annotated[User, Depends(get_current_user)]) -> User:
         if user.role not in roles:
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Недостаточно прав")
         return user
 
     return _dep
@@ -74,13 +77,15 @@ async def get_optional_user(
         payload = decode_token(creds.credentials)
         sub = payload.get("sub")
         if sub is None:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия недействительна")
         user_id = UUID(sub)
     except JWTError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия недействительна")
     except ValueError:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Сессия недействительна")
     user = await db.get(User, user_id)
     if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден")
+    if user.role == UserRole.manager and not user.is_active:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=MANAGER_BLOCKED_MSG)
     return user

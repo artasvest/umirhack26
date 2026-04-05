@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { RouterLink, useRoute } from "vue-router";
-import { api, statusLabelRu, type LeadManagerDetail } from "@/api/client";
+import { api, statusLabelRu, type LeadManagerDetail, type LeadReminder } from "@/api/client";
 import { formatDateTimeMsk } from "@/utils/cabinetTime";
 
 const route = useRoute();
@@ -19,6 +19,13 @@ const micRecorder = ref<MediaRecorder | null>(null);
 const micStream = ref<MediaStream | null>(null);
 const recordChunks = ref<BlobPart[]>([]);
 const claimBusy = ref(false);
+const reminderBusy = ref(false);
+
+const sortedReminders = computed((): LeadReminder[] => {
+  const raw = lead.value?.reminders;
+  if (!raw?.length) return [];
+  return [...raw].sort((a, b) => new Date(a.remind_at).getTime() - new Date(b.remind_at).getTime());
+});
 
 function preferredAudioMime(): string | undefined {
   const types = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"];
@@ -212,9 +219,18 @@ function finishMicRecording(upload: boolean): void {
 
 async function scheduleReminder(): Promise<void> {
   if (!reminderAt.value) return;
-  const iso = new Date(reminderAt.value).toISOString();
-  await api(`/leads/${id.value}/reminders`, { method: "POST", json: { remind_at: iso } });
-  reminderAt.value = "";
+  error.value = "";
+  reminderBusy.value = true;
+  try {
+    const iso = new Date(reminderAt.value).toISOString();
+    await api(`/leads/${id.value}/reminders`, { method: "POST", json: { remind_at: iso } });
+    reminderAt.value = "";
+    await load();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "Не удалось сохранить напоминание";
+  } finally {
+    reminderBusy.value = false;
+  }
 }
 
 async function saveCallback(): Promise<void> {
@@ -517,6 +533,31 @@ const telHref = computed(() => (lead.value ? `tel:${lead.value.phone.replace(/\s
 
       <div v-if="canMutateNotes" class="surface-panel">
         <h2 class="font-display text-lg font-bold text-ink-950 dark:text-ink-50">Напоминание в Telegram</h2>
+        <p class="mt-1 text-xs text-ink-800/70 dark:text-ink-500">
+          Как «Перезвонить позже»: ниже видно все запланированные напоминания по этой заявке. Бот отправит их
+          менеджеру в личку в указанное время.
+        </p>
+        <div v-if="sortedReminders.length" class="mt-4 space-y-2 rounded-xl border border-ink-200/90 bg-ink-50/80 p-4 dark:border-ink-700 dark:bg-ink-900/40">
+          <p class="text-xs font-semibold uppercase tracking-wide text-ink-600 dark:text-ink-400">Запланировано</p>
+          <ul class="space-y-2 text-sm text-ink-800 dark:text-ink-200">
+            <li
+              v-for="r in sortedReminders"
+              :key="r.id"
+              class="flex flex-wrap items-baseline justify-between gap-2 border-b border-ink-200/60 pb-2 last:border-0 last:pb-0 dark:border-ink-700/60"
+            >
+              <span class="font-medium tabular-nums">{{ formatDateTimeMsk(r.remind_at) }}</span>
+              <span
+                class="text-xs font-semibold"
+                :class="r.sent ? 'text-emerald-700 dark:text-emerald-400' : 'text-amber-800 dark:text-amber-300'"
+              >
+                {{ r.sent ? "Отправлено в Telegram" : "Ожидает отправки" }}
+              </span>
+              <span v-if="isAdmin && r.manager_name" class="w-full text-xs text-ink-600 dark:text-ink-400">
+                Кому: {{ r.manager_name }}
+              </span>
+            </li>
+          </ul>
+        </div>
         <div class="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
           <input
             v-model="reminderAt"
@@ -525,15 +566,18 @@ const telHref = computed(() => (lead.value ? `tel:${lead.value.phone.replace(/\s
           />
           <button
             type="button"
-            class="min-h-11 rounded-xl bg-ink-900 px-5 text-sm font-bold text-white shadow-md transition hover:bg-ink-800 active:scale-[0.99] dark:bg-accent dark:text-ink-950 dark:hover:bg-accent-dim"
+            class="min-h-11 rounded-xl bg-ink-900 px-5 text-sm font-bold text-white shadow-md transition hover:bg-ink-800 active:scale-[0.99] disabled:opacity-50 dark:bg-accent dark:text-ink-950 dark:hover:bg-accent-dim"
+            :disabled="reminderBusy"
             @click="scheduleReminder"
           >
-            Сохранить
+            {{ reminderBusy ? "…" : "Добавить" }}
           </button>
         </div>
-        <p class="mt-2 text-xs text-ink-800/60 dark:text-ink-500">
-          Отдельно от поля «Перезвонить позже» выше. Бот отправит напоминание в Telegram (когда будет настроен
-          планировщик).
+        <p v-if="isAdmin && lead?.assigned_manager_id" class="mt-2 text-xs text-ink-700 dark:text-ink-400">
+          Админ: напоминание уйдёт в Telegram <span class="font-semibold">назначенному</span> менеджеру по этой заявке.
+        </p>
+        <p v-else-if="isAdmin && !lead?.assigned_manager_id" class="mt-2 text-xs text-amber-800 dark:text-amber-200">
+          Заявка без назначения — напоминание придёт вам (админу) в Telegram.
         </p>
       </div>
     </template>

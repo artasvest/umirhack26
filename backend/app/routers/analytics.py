@@ -163,8 +163,10 @@ async def export_leads_csv(
                 ";".join(zones) if isinstance(zones, list) else str(zones),
             ]
         )
+    # BOM (U+FEFF), чтобы Excel в Windows открыл файл как UTF-8, а не CP1251 — иначе кириллица «ломается».
+    payload = "\ufeff" + buf.getvalue()
     return Response(
-        content=buf.getvalue(),
+        content=payload.encode("utf-8"),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="leads.csv"'},
     )

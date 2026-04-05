@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { computed, ref, watch } from "vue";
 import { RouterLink, useRoute, useRouter } from "vue-router";
 import { loginRequest, setToken } from "@/api/client";
 
@@ -9,6 +9,15 @@ const email = ref("");
 const password = ref("");
 const error = ref("");
 const loading = ref(false);
+
+const blockedByAdmin = computed(() => route.query.blocked === "1");
+
+watch(
+  () => route.query.blocked,
+  (v) => {
+    if (v === "1") error.value = "";
+  },
+);
 
 async function onSubmit(): Promise<void> {
   error.value = "";
@@ -43,6 +52,16 @@ async function onSubmit(): Promise<void> {
       <div class="space-y-1 text-center sm:text-left">
         <h1 class="font-display text-2xl font-bold tracking-tight text-ink-950 dark:text-ink-50 sm:text-3xl">Вход</h1>
         <p class="text-sm text-ink-600 dark:text-ink-400">Менеджер или администратор</p>
+      </div>
+      <div
+        v-if="blockedByAdmin"
+        class="rounded-xl border border-amber-300 bg-amber-50 px-3 py-3 text-sm text-amber-950 dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100"
+        role="alert"
+      >
+        <p class="font-semibold">Доступ ограничен</p>
+        <p class="mt-1 text-amber-900/90 dark:text-amber-200/95">
+          Ваш аккаунт заблокирован. Войти нельзя — обратитесь к администратору.
+        </p>
       </div>
       <label class="block text-sm font-semibold text-ink-800 dark:text-ink-200">
         Email

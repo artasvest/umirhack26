@@ -1,10 +1,12 @@
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import Lead, LeadStatus, User, UserRole
-from app.schemas import ManagerCreate, ManagerStats, UserPublic
+from app.schemas import ManagerActivePatch, ManagerCreate, ManagerStats, UserPublic
 from app.security import hash_password, require_roles
 
 router = APIRouter(prefix="/api/managers", tags=["managers"])
@@ -78,3 +80,19 @@ async def managers_stats(
             )
         )
     return out
+
+
+@router.patch("/{manager_id}", response_model=UserPublic)
+async def set_manager_active(
+    manager_id: UUID,
+    body: ManagerActivePatch,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin)),
+):
+    m = await db.get(User, manager_id)
+    if m is None or m.role != UserRole.manager:
+        raise HTTPException(status_code=404, detail="Менеджер не найден")
+    m.is_active = body.is_active
+    await db.commit()
+    await db.refresh(m)
+    return UserPublic.model_validate(m)

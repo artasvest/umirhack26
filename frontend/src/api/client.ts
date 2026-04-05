@@ -17,6 +17,12 @@ export function setToken(token: string | null): void {
   }
 }
 
+function clearAuthSession(): void {
+  setToken(null);
+  localStorage.removeItem("studio_role");
+  localStorage.removeItem("studio_name");
+}
+
 export type LeadStatus = "pending" | "in_progress" | "completed";
 
 export interface LeadPublic {
@@ -26,6 +32,14 @@ export interface LeadPublic {
   answers: Record<string, unknown>;
   ai_summary_client?: string | null;
   updated_at?: string | null;
+}
+
+export interface LeadReminder {
+  id: string;
+  remind_at: string;
+  sent: boolean;
+  manager_id: string;
+  manager_name?: string | null;
 }
 
 export interface LeadManagerDetail {
@@ -49,6 +63,7 @@ export interface LeadManagerDetail {
   page_url?: string | null;
   utm_source?: string | null;
   notes: NoteOut[];
+  reminders?: LeadReminder[];
   request_number: string;
 }
 
@@ -75,15 +90,52 @@ export interface LeadListItem {
   callback_note?: string | null;
 }
 
+const HTTP_STATUS_RU: Record<number, string> = {
+  400: "Некорректный запрос",
+  401: "Нужно войти в систему",
+  403: "Недостаточно прав",
+  404: "Ничего не найдено",
+  409: "Действие сейчас невозможно (данные могли измениться)",
+  413: "Слишком большой файл",
+  422: "Проверьте поля формы",
+  429: "Слишком много запросов, подождите",
+  500: "Ошибка на сервере",
+  502: "Сервер временно недоступен",
+  503: "Сервис временно недоступен",
+};
+
+function humanizeDetailArray(detail: unknown[]): string {
+  const parts: string[] = [];
+  for (const item of detail) {
+    if (typeof item === "string") {
+      parts.push(item);
+      continue;
+    }
+    if (item && typeof item === "object" && "msg" in item) {
+      const m = (item as { msg?: string }).msg;
+      if (typeof m === "string") {
+        let s = m;
+        if (s.startsWith("Value error, ")) s = s.slice("Value error, ".length).trim();
+        parts.push(s);
+      }
+    }
+  }
+  return parts.filter(Boolean).join(". ") || "Проверьте введённые данные.";
+}
+
 async function parseError(res: Response): Promise<string> {
   try {
-    const j = await res.json();
+    const j = (await res.json()) as { detail?: unknown };
     if (j && typeof j.detail === "string") return j.detail;
-    if (Array.isArray(j.detail)) return j.detail.map((x: { msg?: string }) => x.msg).join(", ");
+    if (j && Array.isArray(j.detail)) return humanizeDetailArray(j.detail);
   } catch {
     /* ignore */
   }
-  return res.statusText || "Ошибка запроса";
+  const ru = HTTP_STATUS_RU[res.status];
+  if (ru) return ru;
+  const en = (res.statusText || "").trim();
+  if (en && en !== "OK") return en;
+  return "Не удалось выполнить запрос. Попробуйте ещё раз.";
 }
 
 export async function api<T>(
@@ -101,6 +153,20 @@ export async function api<T>(
   }
   const p = path.startsWith("/") ? path : `/${path}`;
   const res = await fetch(`/api${p}`, { ...init, headers, body });
+
+  if (res.status === 401) {
+    const errText = await parseError(res);
+    if (p !== "/auth/login") {
+      clearAuthSession();
+      const here = `${window.location.pathname}${window.location.search}`;
+      const blocked = errText.includes("заблокирован");
+      window.location.assign(
+        blocked ? "/login?blocked=1" : `/login?redirect=${encodeURIComponent(here)}`,
+      );
+    }
+    throw new Error(errText);
+  }
+
   if (!res.ok) throw new Error(await parseError(res));
   if (res.status === 204 || res.headers.get("content-length") === "0") {
     return undefined as T;

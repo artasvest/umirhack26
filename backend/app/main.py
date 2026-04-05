@@ -1,12 +1,14 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.bootstrap import run_startup_bootstrap
 from app.config import settings
 from app.database import engine
 from app.routers import admin_analytics, admin_quiz_schemas, analytics, auth, leads, managers, quiz_schema
+from app.validation_handlers import request_validation_exception_handler
 
 
 @asynccontextmanager
@@ -17,6 +19,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Studio Quiz API", lifespan=lifespan)
+app.add_exception_handler(RequestValidationError, request_validation_exception_handler)
 
 origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
 app.add_middleware(

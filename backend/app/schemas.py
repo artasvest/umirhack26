@@ -30,8 +30,15 @@ class UserPublic(BaseModel):
     email: str
     full_name: str
     role: UserRole
+    is_active: bool = True
 
     model_config = {"from_attributes": True}
+
+
+class ManagerActivePatch(BaseModel):
+    """Только для менеджеров: блокировка / разблокировка входа."""
+
+    is_active: bool
 
 
 class ManagerCreate(BaseModel):
@@ -59,7 +66,7 @@ class QuizAnswers(BaseModel):
 
 class LeadCreate(BaseModel):
     name: str = Field(..., min_length=1)
-    phone: str = Field(..., min_length=10)
+    phone: str = Field(..., description="Российский мобильный, +7 и 10 цифр")
     email: EmailStr | None = None
     comment: str | None = None
     consent: bool = False
@@ -68,6 +75,19 @@ class LeadCreate(BaseModel):
     quiz_schema_id: int | None = None
     page_url: str | None = Field(None, max_length=2048)
     utm_source: str | None = Field(None, max_length=256)
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone_ru(cls, v: str) -> str:
+        s = (v or "").strip()
+        digits = "".join(c for c in s if c.isdigit())
+        if len(digits) == 11 and digits.startswith("8"):
+            digits = "7" + digits[1:]
+        if len(digits) == 11 and digits.startswith("7"):
+            return f"+{digits}"
+        if len(digits) == 10:
+            return f"+7{digits}"
+        raise ValueError("Укажите российский мобильный: 10 цифр (маска +7 (___) ___-__-__).")
 
     @field_validator("email", mode="before")
     @classmethod
@@ -163,8 +183,19 @@ class NoteOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ReminderOut(BaseModel):
+    id: UUID
+    remind_at: datetime
+    sent: bool
+    manager_id: UUID
+    manager_name: str | None = None
+
+    model_config = {"from_attributes": True}
+
+
 class LeadManagerDetail(LeadDetail):
     notes: list[NoteOut] = Field(default_factory=list)
+    reminders: list[ReminderOut] = Field(default_factory=list)
     request_number: str
 
 

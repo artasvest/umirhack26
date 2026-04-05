@@ -17,6 +17,7 @@ async def run_startup_migrations(engine: AsyncEngine) -> None:
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS page_url TEXT",
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS utm_source VARCHAR(256)",
         "ALTER TABLE leads ADD COLUMN IF NOT EXISTS callback_due_notified BOOLEAN NOT NULL DEFAULT false",
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT true",
         """
         CREATE TABLE IF NOT EXISTS telegram_link_tokens (
             token VARCHAR(64) NOT NULL PRIMARY KEY,

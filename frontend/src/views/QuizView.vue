@@ -14,6 +14,12 @@ import {
 } from "@/composables/useQuizPersistence";
 import { trackEvent } from "@/composables/trackAnalytics";
 import {
+  extractRuMobileDigits,
+  formatRuPhoneDisplay,
+  isRuPhoneComplete,
+  ruPhoneToE164,
+} from "@/composables/useRuPhoneMask";
+import {
   loadLastSubmittedLead,
   saveLastSubmittedLead,
   type LastSubmittedLead,
@@ -569,25 +575,19 @@ function goBack(): void {
   flowError.value = "";
 }
 
-const phoneDisplay = computed(() => {
-  const d = form.value.phoneDigits.replace(/\D/g, "").slice(0, 10);
-  const p = (i: number) => d[i] ?? "_";
-  if (!d.length) return "+7 ";
-  return `+7 (${p(0)}${p(1)}${p(2)}) ${p(3)}${p(4)}${p(5)}-${p(6)}${p(7)}-${p(8)}${p(9)}`;
-});
+const phoneDisplay = computed(() => formatRuPhoneDisplay(form.value.phoneDigits));
 
-const phoneValid = computed(() => form.value.phoneDigits.replace(/\D/g, "").length === 10);
+const phoneValid = computed(() => isRuPhoneComplete(form.value.phoneDigits));
 
 function onPhoneInput(e: Event): void {
   const t = e.target as HTMLInputElement;
-  const digits = t.value.replace(/\D/g, "");
-  const rest = digits.startsWith("7") ? digits.slice(1) : digits.startsWith("8") ? digits.slice(1) : digits;
-  form.value.phoneDigits = rest.slice(0, 10);
+  form.value.phoneDigits = extractRuMobileDigits(t.value);
 }
 
-function formatPhoneApi(): string {
-  const d = form.value.phoneDigits.replace(/\D/g, "").slice(0, 10);
-  return `+7${d}`;
+function onPhonePaste(e: ClipboardEvent): void {
+  e.preventDefault();
+  const text = e.clipboardData?.getData("text") ?? "";
+  form.value.phoneDigits = extractRuMobileDigits(text);
 }
 
 const submitLoading = ref(false);
@@ -602,7 +602,7 @@ async function submitLead(): Promise<void> {
     return;
   }
   if (!phoneValid.value) {
-    submitError.value = "Введите корректный номер телефона";
+    submitError.value = "Введите полный номер: +7 и 10 цифр мобильного телефона.";
     return;
   }
   submitLoading.value = true;
@@ -634,7 +634,7 @@ async function submitLead(): Promise<void> {
         : null;
     const payload: Record<string, unknown> = {
       name: form.value.name.trim(),
-      phone: formatPhoneApi(),
+      phone: ruPhoneToE164(form.value.phoneDigits),
       email: form.value.email.trim() || null,
       comment: form.value.comment.trim() || null,
       consent: form.value.consent,
@@ -937,11 +937,18 @@ onMounted(() => {
                     <input
                       :value="phoneDisplay"
                       type="text"
-                      inputmode="tel"
-                      placeholder="+7 (___) ___-__-__"
-                      class="mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 font-mono outline-none focus:border-accent dark:border-ink-600 dark:bg-ink-950 dark:text-ink-50"
+                      inputmode="numeric"
+                      autocomplete="tel"
+                      maxlength="18"
+                      placeholder="+7 (900) 123-45-67"
+                      aria-describedby="quiz-phone-hint"
+                      class="mt-1 w-full rounded-xl border border-ink-200 bg-white px-3 py-2 font-mono text-base tracking-wide outline-none focus:border-accent focus:ring-2 focus:ring-accent/20 dark:border-ink-600 dark:bg-ink-950 dark:text-ink-50"
                       @input="onPhoneInput"
+                      @paste="onPhonePaste"
                     />
+                    <span id="quiz-phone-hint" class="mt-1 block text-xs text-ink-600 dark:text-ink-400">
+                      Российский мобильный: можно вставить номер целиком — маска подставится сама.
+                    </span>
                   </label>
                   <label class="block text-sm font-medium text-ink-800 dark:text-ink-200">
                     Email

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth_messages import MANAGER_BLOCKED_MSG
 from app.config import settings
 from app.database import get_db
 from app.models import User, UserRole
@@ -18,6 +19,8 @@ async def login(body: LoginBody, db: AsyncSession = Depends(get_db)):
     user = r.scalar_one_or_none()
     if user is None or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Неверный email или пароль")
+    if user.role == UserRole.manager and not user.is_active:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=MANAGER_BLOCKED_MSG)
     token = create_access_token(
         str(user.id),
         {"role": user.role.value, "email": user.email},

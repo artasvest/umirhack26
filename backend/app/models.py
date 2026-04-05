@@ -27,6 +27,7 @@ class User(Base):
     hashed_password: Mapped[str] = mapped_column(String(255))
     full_name: Mapped[str] = mapped_column(String(255))
     role: Mapped[UserRole] = mapped_column(Enum(UserRole, native_enum=False, values_callable=lambda x: [e.value for e in x]), default=UserRole.manager)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     telegram_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

@@ -37,6 +37,23 @@ async def _get_user_by_tg(db, tg_id: str) -> User | None:
     return r.scalar_one_or_none()
 
 
+BLOCKED_MANAGER_TG_HTML = (
+    "<b>Аккаунт заблокирован</b>\n"
+    "Доступ к сайту отключён администратором. Работа в боте для менеджеров тоже недоступна — обратитесь к администратору."
+)
+
+
+async def _reply_blocked_manager(update: Update) -> None:
+    if update.message:
+        await update.message.reply_html(BLOCKED_MANAGER_TG_HTML)
+    elif update.callback_query and update.callback_query.message:
+        await update.callback_query.message.reply_html(BLOCKED_MANAGER_TG_HTML)
+
+
+def _is_blocked_manager(u: User | None) -> bool:
+    return bool(u and u.role == UserRole.manager and not u.is_active)
+
+
 def _status_ru(s: LeadStatus) -> str:
     return {"pending": "в пуле", "in_progress": "в работе", "completed": "завершена"}.get(s.value, s.value)
 
@@ -98,6 +115,9 @@ async def cmd_start_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     async with async_session_maker() as db:
         u = await _get_user_by_tg(db, tg)
         if u:
+            if _is_blocked_manager(u):
+                await update.message.reply_html(BLOCKED_MANAGER_TG_HTML)
+                return
             await update.message.reply_html(
                 f"Вы вошли как <b>{html.escape(u.email)}</b>\n{html.escape(u.full_name)}",
                 reply_markup=MAIN_KB,
@@ -126,6 +146,9 @@ async def cmd_start_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             )
             return
         u = await _get_user_by_tg(db, tg)
+        if u and _is_blocked_manager(u):
+            await update.message.reply_html(BLOCKED_MANAGER_TG_HTML)
+            return
 
     fn = (u.full_name if u else "") or ""
     await update.message.reply_text(
@@ -171,6 +194,9 @@ async def show_pool(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not u:
             await update.message.reply_text("Сначала подключите бота по ссылке из кабинета на сайте (/start).")
             return
+        if _is_blocked_manager(u):
+            await update.message.reply_html(BLOCKED_MANAGER_TG_HTML)
+            return
         vid, vrole = u.id, u.role
         q = (
             select(Lead)
@@ -197,6 +223,9 @@ async def show_my(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         u = await _get_user_by_tg(db, tg)
         if not u:
             await update.message.reply_text("Сначала подключите бота по ссылке из кабинета на сайте (/start).")
+            return
+        if _is_blocked_manager(u):
+            await update.message.reply_html(BLOCKED_MANAGER_TG_HTML)
             return
         vid, vrole = u.id, u.role
         q = (
@@ -257,6 +286,10 @@ async def on_lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         user = await _get_user_by_tg(db, tg)
         if not user:
             await cq.answer("Сначала подключите бота по ссылке с сайта: /start", show_alert=True)
+            return
+        if _is_blocked_manager(user):
+            await cq.answer("Аккаунт заблокирован", show_alert=True)
+            await _reply_blocked_manager(update)
             return
         lead = await db.get(Lead, lid)
         if not lead:

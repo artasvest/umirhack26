@@ -7,6 +7,7 @@ interface UserPublic {
   email: string;
   full_name: string;
   role: string;
+  is_active?: boolean;
 }
 
 interface ManagerStats {
@@ -25,6 +26,25 @@ const name = ref("");
 const email = ref("");
 const password = ref("");
 const creating = ref(false);
+const togglingId = ref<string | null>(null);
+
+function isActive(m: UserPublic): boolean {
+  return m.is_active !== false;
+}
+
+async function setManagerActive(m: UserPublic, active: boolean): Promise<void> {
+  if (isActive(m) === active) return;
+  togglingId.value = m.id;
+  error.value = "";
+  try {
+    await api(`/managers/${m.id}`, { method: "PATCH", json: { is_active: active } });
+    await load();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : "Не удалось изменить статус";
+  } finally {
+    togglingId.value = null;
+  }
+}
 
 async function load(): Promise<void> {
   try {
@@ -107,6 +127,7 @@ function statFor(id: string): ManagerStats | undefined {
             <th class="px-4 py-3">В работе</th>
             <th class="px-4 py-3">Завершено</th>
             <th class="px-4 py-3">Конверсия %</th>
+            <th class="px-4 py-3">Доступ</th>
           </tr>
         </thead>
         <tbody>
@@ -114,12 +135,41 @@ function statFor(id: string): ManagerStats | undefined {
             v-for="m in managers"
             :key="m.id"
             class="border-b border-ink-200 bg-white text-ink-900 dark:border-ink-800/80 dark:bg-ink-950/40 dark:text-ink-100"
+            :class="{ 'opacity-75': !isActive(m) }"
           >
-            <td class="px-4 py-3 font-medium">{{ m.full_name }}</td>
+            <td class="px-4 py-3 font-medium">
+              {{ m.full_name }}
+              <span
+                v-if="!isActive(m)"
+                class="ml-2 rounded-md bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-900 dark:bg-amber-950/50 dark:text-amber-200"
+              >
+                заблокирован
+              </span>
+            </td>
             <td class="px-4 py-3 text-ink-600 dark:text-ink-300">{{ m.email }}</td>
             <td class="px-4 py-3">{{ statFor(m.id)?.in_progress_count ?? 0 }}</td>
             <td class="px-4 py-3">{{ statFor(m.id)?.completed_count ?? 0 }}</td>
             <td class="px-4 py-3">{{ statFor(m.id)?.conversion_percent ?? 0 }}</td>
+            <td class="px-4 py-3">
+              <button
+                v-if="isActive(m)"
+                type="button"
+                class="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-50 disabled:opacity-50 dark:border-red-900/50 dark:text-red-200 dark:hover:bg-red-950/40"
+                :disabled="togglingId === m.id"
+                @click="setManagerActive(m, false)"
+              >
+                {{ togglingId === m.id ? "…" : "Заблокировать" }}
+              </button>
+              <button
+                v-else
+                type="button"
+                class="rounded-lg border border-emerald-200 px-3 py-1.5 text-xs font-semibold text-emerald-800 hover:bg-emerald-50 disabled:opacity-50 dark:border-emerald-800/50 dark:text-emerald-200 dark:hover:bg-emerald-950/40"
+                :disabled="togglingId === m.id"
+                @click="setManagerActive(m, true)"
+              >
+                {{ togglingId === m.id ? "…" : "Разблокировать" }}
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>

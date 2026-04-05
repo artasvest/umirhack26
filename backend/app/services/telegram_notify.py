@@ -105,3 +105,35 @@ async def notify_new_lead(
         summary=summary,
         request_number=request_number,
     )
+
+
+def inline_assigned_lead_keyboard(lead_id: str) -> dict:
+    """Кнопки для назначенного менеджера (callback как в боте: view, done)."""
+    return {
+        "inline_keyboard": [
+            [{"text": "Открыть карточку", "callback_data": f"view:{lead_id}"}],
+            [{"text": "Завершить", "callback_data": f"done:{lead_id}"}],
+        ]
+    }
+
+
+async def notify_manager_assigned_by_admin(
+    *,
+    telegram_chat_id: str,
+    lead_id: str,
+    request_number: str,
+    client_name: str,
+    client_phone: str,
+) -> bool:
+    """Уведомление менеджеру, когда админ назначил его на заявку."""
+    text = (
+        "<b>Вас назначили на заявку</b>\n"
+        f"№ {html.escape(request_number)}\n"
+        f"Клиент: {html.escape(client_name)}\n"
+        f"Телефон: {html.escape(client_phone)}"
+    )
+    return await send_message(
+        telegram_chat_id,
+        text,
+        reply_markup=inline_assigned_lead_keyboard(lead_id),
+    )

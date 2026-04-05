@@ -11,19 +11,15 @@ services:
       - POSTGRES_USER=umir_user
       - POSTGRES_PASSWORD=0607078219
       - POSTGRES_DB=umir_db
-
     volumes:
       - postgres_data:/var/lib/postgresql/data
-
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U umir_user -d umir_db"] #сначала юзер, потом название БД
+      test: ["CMD-SHELL", "pg_isready -U umir_user -d umir_db"]
       interval: 10s
       timeout: 30s
       retries: 5
-
     ports:
-      - 5432:5432
-
+      - "5432:5432"
     networks:
       - prod
 
@@ -32,11 +28,10 @@ services:
     container_name: adm_hack
     restart: always
     ports:
-      - 7000:8080
+      - "7000:8080"
     networks:
       - prod
 
-  # До старта API: таблицы, миграции, админ из ADMIN_* и default quiz schema (идемпотентно).
   db-bootstrap:
     build:
       context: ./backend
@@ -68,12 +63,10 @@ services:
       db-bootstrap:
         condition: service_completed_successfully
     ports:
-      - 8000:8000
-
+      - "8000:8000"
     networks:
       - prod
 
-  # Telegram long polling: тот же образ, что у API. Нужны TELEGRAM_BOT_TOKEN и DATABASE_URL в корневом .env
   bot:
     build:
       context: ./backend
@@ -92,7 +85,6 @@ services:
     networks:
       - prod
 
-  # SPA и прокси /api → backend. Открывайте http://<сервер>:80 (не :8000 — там только API без HTML).
   nginx:
     build:
       context: .

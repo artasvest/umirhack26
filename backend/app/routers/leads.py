@@ -7,6 +7,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, UploadFile, File, status
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.config import settings
 from app.database import async_session_maker, get_db
@@ -25,6 +26,7 @@ from app.schemas import (
     NoteCreate,
     NoteOut,
     ReminderCreate,
+    ReminderOut,
     SummaryPreviewBody,
     SummaryPreviewResponse,
 )
@@ -37,11 +39,32 @@ from app.services.ai_text import (
     try_gigachat_client_summary_only,
     try_gigachat_manager_summary_only,
 )
-from app.services.telegram_notify import notify_new_lead_broadcast
+from app.services.telegram_notify import notify_manager_assigned_by_admin, notify_new_lead_broadcast
 from app.services.transcription import transcribe_audio
 
 router = APIRouter(prefix="/api/leads", tags=["leads"])
 _log = logging.getLogger(__name__)
+
+
+async def _notify_manager_assigned_async(manager_id: UUID, lead_id: UUID) -> None:
+    """Фоновая отправка в Telegram менеджеру после назначения админом."""
+    if not settings.TELEGRAM_BOT_TOKEN.strip():
+        return
+    async with async_session_maker() as db:
+        mgr = await db.get(User, manager_id)
+        if not mgr or not (mgr.telegram_user_id or "").strip():
+            return
+        lead = await db.get(Lead, lead_id)
+        if not lead:
+            return
+        req = lead_request_number(lead)
+        await notify_manager_assigned_by_admin(
+            telegram_chat_id=mgr.telegram_user_id.strip(),
+            lead_id=str(lead.id),
+            request_number=req,
+            client_name=lead.name,
+            client_phone=lead.phone,
+        )
 
 
 async def _notify_telegram_new_pool_lead(
@@ -344,7 +367,10 @@ async def get_lead(
     user: Annotated[User | None, Depends(get_optional_user)],
     db: AsyncSession = Depends(get_db),
 ):
-    lead = await db.get(Lead, lead_id)
+    lr = await db.execute(
+        select(Lead).where(Lead.id == lead_id).options(selectinload(Lead.reminders))
+    )
+    lead = lr.scalar_one_or_none()
     if lead is None:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     req_num = lead_request_number(lead)
@@ -355,10 +381,28 @@ async def get_lead(
             select(Note).where(Note.lead_id == lead.id).order_by(Note.created_at.asc())
         )
         notes = nr.scalars().all()
+        rems = sorted(lead.reminders, key=lambda x: x.remind_at)
+        mgr_ids = {r.manager_id for r in rems}
+        mnames: dict[UUID, str] = {}
+        if mgr_ids:
+            ur = await db.execute(select(User).where(User.id.in_(mgr_ids)))
+            for u in ur.scalars().all():
+                mnames[u.id] = u.full_name
+        reminder_rows = [
+            ReminderOut(
+                id=r.id,
+                remind_at=r.remind_at,
+                sent=r.sent,
+                manager_id=r.manager_id,
+                manager_name=mnames.get(r.manager_id),
+            )
+            for r in rems
+        ]
         base = LeadDetail.model_validate(lead)
         return LeadManagerDetail(
             **base.model_dump(),
             notes=[NoteOut.model_validate(n) for n in notes],
+            reminders=reminder_rows,
             request_number=req_num,
         )
     return LeadPublicView(
@@ -401,6 +445,7 @@ async def patch_lead_status(
 async def patch_lead_admin(
     lead_id: UUID,
     body: LeadAdminPatch,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     _: User = Depends(require_roles(UserRole.admin)),
 ):
@@ -408,6 +453,7 @@ async def patch_lead_admin(
     if lead is None:
         raise HTTPException(status_code=404, detail="Заявка не найдена")
 
+    prev_assign = lead.assigned_manager_id
     was_in_pool = lead.status == LeadStatus.pending and lead.assigned_manager_id is None
 
     patch = body.model_dump(exclude_unset=True)
@@ -440,6 +486,8 @@ async def patch_lead_admin(
     lead.updated_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(lead)
+    if new_assign is not None and new_assign != prev_assign:
+        background_tasks.add_task(_notify_manager_assigned_async, new_assign, lead.id)
     return LeadDetail.model_validate(lead)
 
 
@@ -591,7 +639,10 @@ async def create_reminder(
         raise HTTPException(status_code=404, detail="Заявка не найдена")
     if user.role == UserRole.manager and not _manager_can_mutate_lead(user, lead):
         raise HTTPException(status_code=403, detail="Сначала возьмите заявку в работу")
-    r = Reminder(lead_id=lead.id, manager_id=user.id, remind_at=body.remind_at, sent=False)
+    target_manager_id = user.id
+    if user.role == UserRole.admin and lead.assigned_manager_id is not None:
+        target_manager_id = lead.assigned_manager_id
+    r = Reminder(lead_id=lead.id, manager_id=target_manager_id, remind_at=body.remind_at, sent=False)
     db.add(r)
     await db.commit()
     return {"ok": True, "message": "Напоминание сохранено; отправка в Telegram — в следующей итерации"}
