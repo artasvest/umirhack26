@@ -12,6 +12,7 @@ Desktop.ini
 !.env.*.example
 *.pem
 *.key
+.venv
 
 # --- Python / backend ---
 __pycache__/

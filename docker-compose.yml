@@ -1,18 +1,40 @@
+networks:
+  prod:
+    driver: bridge
+
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     restart: unless-stopped
+    shm_size: 256mb
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-umir}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-      POSTGRES_DB: ${POSTGRES_DB:-umir_db}
+      - POSTGRES_USER=umir_user
+      - POSTGRES_PASSWORD=0607078219
+      - POSTGRES_DB=umir_db
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      test: ["CMD-SHELL", "pg_isready -U umir_user -d umir_db"] #сначала юзер, потом название БД
+      interval: 10s
+      timeout: 30s
+      retries: 5
+
+    ports:
+      - 5432:5432
+
+    networks:
+      - prod
+
+  adminer:
+    image: adminer
+    container_name: adm_hack
+    restart: always
+    ports:
+      - 7000:8080
+    networks:
+      - prod
 
   backend:
     build:
@@ -20,14 +42,17 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env
+      - .env.example
     environment:
-      DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env (host must be db)}
+      DATABASE_URL: ${DATABASE_URL}
     depends_on:
       db:
         condition: service_healthy
-    expose:
-      - "8000"
+    ports:
+      - 8000:8000
+    
+    networks:
+     - prod
 
   nginx:
     build:
@@ -35,9 +60,12 @@ services:
       dockerfile: docker/nginx/Dockerfile
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - 80:80
     depends_on:
       - backend
+      - db
+    networks:
+      - prod
 
 volumes:
   postgres_data:
