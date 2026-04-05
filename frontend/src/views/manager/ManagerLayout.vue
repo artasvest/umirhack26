@@ -104,7 +104,7 @@ onUnmounted(() => {
           </RouterLink>
           <RouterLink
             v-if="isAdmin"
-            to="/admin"
+            to="/admin/analytics"
             class="rounded-full px-3 py-2 text-sm font-semibold text-ink-700 transition hover:bg-ink-100 hover:text-ink-950 dark:text-ink-200 dark:hover:bg-ink-800 dark:hover:text-white"
           >
             Админ-панель
@@ -176,7 +176,7 @@ onUnmounted(() => {
             </RouterLink>
             <RouterLink
               v-if="isAdmin"
-              to="/admin"
+              to="/admin/analytics"
               class="rounded-xl px-4 py-3.5 text-base font-semibold text-ink-800 transition active:bg-ink-100 dark:text-ink-100 dark:active:bg-ink-800"
               @click="closeMobileMenu"
             >

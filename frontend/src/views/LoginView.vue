@@ -31,7 +31,7 @@ async function onSubmit(): Promise<void> {
     localStorage.setItem("studio_user_id", res.user_id);
     const redir = (route.query.redirect as string) || "";
     if (res.role === "admin") {
-      await router.replace(redir.startsWith("/admin") ? redir : "/admin");
+      await router.replace(redir.startsWith("/admin") ? redir : "/admin/analytics");
     } else {
       await router.replace(redir.startsWith("/manager") ? redir : "/manager");
     }

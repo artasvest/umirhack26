@@ -21,7 +21,7 @@ const router = createRouter({
       component: () => import("@/views/admin/AdminLayout.vue"),
       meta: { roles: ["admin"] },
       children: [
-        { path: "", name: "admin-home", component: () => import("@/views/admin/AdminHomeView.vue") },
+        { path: "", redirect: { name: "admin-analytics" } },
         { path: "managers", name: "admin-managers", component: () => import("@/views/admin/AdminManagersView.vue") },
         { path: "leads", name: "admin-leads", component: () => import("@/views/admin/AdminLeadsView.vue") },
         { path: "analytics", name: "admin-analytics", component: () => import("@/views/admin/AdminAnalyticsView.vue") },
@@ -41,7 +41,7 @@ router.beforeEach((to) => {
   if (!token) return { name: "login", query: { redirect: to.fullPath } };
   if (!role || !need.includes(role)) {
     if (token && role === "manager") return { name: "manager-leads" };
-    if (token && role === "admin") return { name: "admin-home" };
+    if (token && role === "admin") return { name: "admin-analytics" };
     return { name: "login" };
   }
   return true;

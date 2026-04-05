@@ -25,7 +25,6 @@ async function openTelegramLink(): Promise<void> {
 }
 
 const navLinks = [
-  { to: "/admin", label: "Обзор" },
   { to: "/admin/leads", label: "Заявки" },
   { to: "/admin/managers", label: "Менеджеры" },
   { to: "/admin/analytics", label: "Аналитика" },
@@ -78,7 +77,7 @@ onUnmounted(() => {
     <header class="app-header md:hidden">
       <div class="mx-auto flex max-w-6xl items-center justify-between gap-3 px-4 py-3">
         <RouterLink
-          to="/admin"
+          to="/admin/analytics"
           class="min-w-0 font-display text-base font-bold tracking-tight text-ink-950 dark:text-white"
           @click="closeMobileMenu"
         >
