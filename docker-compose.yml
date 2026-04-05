@@ -59,7 +59,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     env_file:
-      - .env.example
+      - .env
     environment:
       DATABASE_URL: ${DATABASE_URL}
     depends_on:
@@ -69,9 +69,28 @@ services:
         condition: service_completed_successfully
     ports:
       - 8000:8000
-    
+
     networks:
-     - prod
+      - prod
+
+  # Telegram long polling: тот же образ, что у API. Нужны TELEGRAM_BOT_TOKEN и DATABASE_URL в корневом .env
+  bot:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    command: ["python", "bot_worker.py"]
+    depends_on:
+      db:
+        condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
+    networks:
+      - prod
 
   # SPA и прокси /api → backend. Открывайте http://<сервер>:80 (не :8000 — там только API без HTML).
   nginx:
