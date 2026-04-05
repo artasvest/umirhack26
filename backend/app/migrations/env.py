@@ -87,8 +87,46 @@ async def run_async_migrations() -> None:
     await connectable.dispose()
 
 
+_NETWORK_HINT = """
+Нет устойчивого TCP-доступа к PostgreSQL с этой машины (часто WinError 10054 /
+«connection was closed in the middle»). Это не баг Alembic в коде, а сеть или настройка сервера.
+
+Что обычно не так:
+  • Порт 5432 с интернета закрыт (ufw, security group, провайдер) или Postgres слушает только 127.0.0.1.
+  • Подключаться к боевой БД «в лоб» с ноутбука не обязательно: при docker compose схема поднимается при старте API (create_all + db_migrate).
+
+Варианты:
+  1) Не запускать Alembic с Windows — деплой только Docker на сервере.
+  2) SSH-туннель:  ssh -L 5433:127.0.0.1:5432 user@СЕРВЕР
+     В backend/.env:  DATABASE_URL=postgresql+asyncpg://USER:PASS@127.0.0.1:5433/DB
+  3) Зайти по SSH на сервер и выполнить alembic из каталога backend там.
+""".strip()
+
+
+def _is_likely_remote_db_network_error(exc: BaseException) -> bool:
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        name = type(cur).__name__.lower()
+        msg = str(cur).lower()
+        if "10054" in str(cur) or "winerror 10054" in msg:
+            return True
+        if "connectionreseterror" in name or "brokenpipe" in name:
+            return True
+        if "connectiondoesnotexist" in name.replace("_", "") or "closed in the middle" in msg:
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return False
+
+
 def run_migrations_online() -> None:
-    asyncio.run(run_async_migrations())
+    try:
+        asyncio.run(run_async_migrations())
+    except BaseException as e:
+        if _is_likely_remote_db_network_error(e):
+            raise RuntimeError(_NETWORK_HINT) from e
+        raise
 
 
 if context.is_offline_mode():

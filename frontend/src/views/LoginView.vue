@@ -14,6 +14,7 @@ async function onSubmit(): Promise<void> {
   error.value = "";
   loading.value = true;
   try {
+    setToken(null);
     const res = await loginRequest(email.value.trim(), password.value);
     setToken(res.access_token);
     localStorage.setItem("studio_role", res.role);

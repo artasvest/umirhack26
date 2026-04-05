@@ -36,6 +36,23 @@ services:
     networks:
       - prod
 
+  # До старта API: таблицы, миграции, админ из ADMIN_* и default quiz schema (идемпотентно).
+  db-bootstrap:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["python", "-m", "app.bootstrap"]
+    restart: "no"
+    networks:
+      - prod
+
   backend:
     build:
       context: ./backend
@@ -48,6 +65,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-bootstrap:
+        condition: service_completed_successfully
     ports:
       - 8000:8000
     
