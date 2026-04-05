@@ -215,7 +215,6 @@ const defaultForm = (): QuizFormState => ({
 const form = ref<QuizFormState>(defaultForm());
 const aiSummary = ref("");
 const summaryLoading = ref(false);
-const imgError = ref<Record<string, boolean>>({});
 
 const schemaFp = ref("");
 /** id строки quiz_schema с сервера (для аналитики и заявки); 0 = нет привязки */
@@ -706,15 +705,6 @@ function showFooterNext(): boolean {
   return t === "multi" || t === "slider" || t === "ai_summary";
 }
 
-function imgKey(nodeId: string, optId: string): string {
-  return `${nodeId}:${optId}`;
-}
-
-function onImgError(nodeId: string, optId: string): void {
-  const k = imgKey(nodeId, optId);
-  imgError.value = { ...imgError.value, [k]: true };
-}
-
 onMounted(() => {
   lastSubmittedLead.value = loadLastSubmittedLead();
   void emitView();
@@ -810,22 +800,7 @@ onMounted(() => {
                     "
                     @click="onSelectSingle(currentNode, opt)"
                   >
-                    <div
-                      v-if="opt.image && !imgError[imgKey(currentNode.id, opt.id)]"
-                      class="relative h-28 w-full overflow-hidden bg-ink-100"
-                    >
-                      <img
-                        :src="opt.image"
-                        :alt="opt.label"
-                        class="h-full w-full object-cover"
-                        @error="onImgError(currentNode.id, opt.id)"
-                      />
-                      <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
-                      <div class="absolute bottom-3 left-3 right-3">
-                        <span class="font-medium text-white drop-shadow">{{ opt.label }}</span>
-                      </div>
-                    </div>
-                    <div v-else class="p-4">
+                    <div class="p-4">
                       <span class="font-medium text-ink-900 dark:text-ink-100">{{ opt.label }}</span>
                     </div>
                   </button>

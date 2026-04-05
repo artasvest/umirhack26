@@ -104,37 +104,31 @@
         {
           "id": "modern",
           "label": "Современный",
-          "image": "/styles/modern.jpg",
           "nextStep": "step5"
         },
         {
           "id": "minimal",
           "label": "Минимализм",
-          "image": "/styles/minimal.jpg",
           "nextStep": "step5"
         },
         {
           "id": "scandi",
           "label": "Скандинавский",
-          "image": "/styles/scandi.jpg",
           "nextStep": "step5"
         },
         {
           "id": "loft",
           "label": "Лофт",
-          "image": "/styles/loft.jpg",
           "nextStep": "step5"
         },
         {
           "id": "neoclassic",
           "label": "Неоклассика",
-          "image": "/styles/neoclassic.jpg",
           "nextStep": "step5"
         },
         {
           "id": "classic",
           "label": "Классика",
-          "image": "/styles/classic.jpg",
           "nextStep": "step5"
         },
         {

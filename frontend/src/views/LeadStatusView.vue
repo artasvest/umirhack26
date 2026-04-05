@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { RouterLink, useRoute } from "vue-router";
-import { api, statusLabelRu, type LeadPublic } from "@/api/client";
+import { api, type LeadPublic } from "@/api/client";
 
 const route = useRoute();
 const id = computed(() => route.params.id as string);
@@ -68,7 +68,7 @@ const statusStepIndex = computed(() => {
 const steps = [
   { key: "accepted", title: "Принято", desc: "Заявка получена" },
   { key: "work", title: "В работе", desc: "Мы с вами свяжемся" },
-  { key: "done", title: "Завершено", desc: "Обработка заявки" },
+  { key: "done", title: "Завершено", desc: "Заявка обработана" },
 ] as const;
 </script>
 
@@ -132,13 +132,7 @@ const steps = [
               <p class="mt-0.5 hidden text-[11px] text-ink-600 dark:text-ink-400 sm:block">{{ st.desc }}</p>
             </li>
           </ol>
-          <p class="mt-4 text-sm text-ink-800/70 dark:text-ink-400">Текущий статус</p>
-          <p
-            class="mt-1 inline-flex rounded-full bg-ink-100 px-3 py-1 text-sm font-semibold text-ink-900 dark:bg-ink-800 dark:text-ink-100"
-          >
-            {{ statusLabelRu(data.status) }}
-          </p>
-          <p class="mt-2 text-xs text-ink-800/60 dark:text-ink-500">Обновляется автоматически каждые 5 секунд</p>
+          <p class="mt-4 text-xs text-ink-800/60 dark:text-ink-500">Обновляется автоматически каждые 5 секунд</p>
         </div>
 
         <div

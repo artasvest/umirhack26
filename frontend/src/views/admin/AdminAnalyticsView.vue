@@ -61,8 +61,6 @@ const filterQuiz = ref("");
 const quizList = ref<QuizListRow[]>([]);
 const byQuiz = ref<ByQuizRow[]>([]);
 const loading = ref(true);
-const clearing = ref(false);
-const wipingAll = ref(false);
 const error = ref("");
 
 const maxFunnelViews = computed(() => {
@@ -142,42 +140,6 @@ async function downloadCsv(): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-async function clearFunnelEvents(): Promise<void> {
-  if (!confirm("Удалить только события воронки (step_view, step_drop, step_answer)? Заявки не затронуты.")) {
-    return;
-  }
-  clearing.value = true;
-  error.value = "";
-  try {
-    await api<{ deleted: number }>("/analytics/events", { method: "DELETE" });
-    await load();
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "Не удалось очистить";
-  } finally {
-    clearing.value = false;
-  }
-}
-
-async function wipeAllDashboardData(): Promise<void> {
-  if (
-    !confirm(
-      "Удалить ВСЁ с этой страницы: воронка, все заявки, заметки и напоминания по заявкам? Пользователи и квиз в админке останутся.",
-    )
-  ) {
-    return;
-  }
-  wipingAll.value = true;
-  error.value = "";
-  try {
-    await api<Record<string, number>>("/admin/analytics/data", { method: "DELETE" });
-    await load();
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : "Не удалось удалить";
-  } finally {
-    wipingAll.value = false;
-  }
-}
-
 void load();
 </script>
 
@@ -205,22 +167,6 @@ void load();
           @click="downloadCsv"
         >
           Экспорт CSV
-        </button>
-        <button
-          type="button"
-          class="rounded-xl border border-ink-300 bg-ink-100 px-4 py-2 text-sm font-semibold text-ink-900 transition hover:bg-ink-200 disabled:opacity-50 dark:border-ink-600 dark:bg-ink-800 dark:text-ink-100 dark:hover:bg-ink-700"
-          :disabled="clearing || loading || wipingAll"
-          @click="clearFunnelEvents"
-        >
-          {{ clearing ? "Очистка…" : "Только воронка" }}
-        </button>
-        <button
-          type="button"
-          class="rounded-xl border border-red-300 bg-red-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-red-700 disabled:opacity-50 dark:border-red-500 dark:bg-red-700 dark:hover:bg-red-600"
-          :disabled="wipingAll || loading || clearing"
-          @click="wipeAllDashboardData"
-        >
-          {{ wipingAll ? "Удаление…" : "Удалить всё (воронка + заявки)" }}
         </button>
       </div>
     </div>
